@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "461974819621",
+    "project_id": "core-ai-studios",
+    "storage_bucket": "core-ai-studios.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:461974819621:android:2e1a6902ecaaa2c17d40cc",
+        "android_client_info": {
+          "package_name": "com.kafilcodes.coreaistudios.core_ai_studios"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "461974819621-igsf34dgqot5mdoscr838eemgret8fab.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.kafilcodes.coreaistudios.core_ai_studios",
+            "certificate_hash": "5f7d64ceb901d28dc4c082345442f1f4220e62d0"
+          }
+        },
+        {
+          "client_id": "461974819621-h04kt8h0qbo6lfsd4k680shlinjrvtjv.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDuoRFuGz8gaAWOlcuX7t2vZ8MEk2wvPSM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "461974819621-h04kt8h0qbo6lfsd4k680shlinjrvtjv.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "461974819621-tfm20rhesv8ibs8c860lned75rt6ldoq.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.kafilcodes.coreaistudios.coreAiStudios"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
