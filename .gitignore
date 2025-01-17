@@ -27,5 +27,9 @@ ios/Flutter/ephemeral/
 # Environment
 .env
 
+# Firebase
+firebase.json
+lib/firebase_options.dart
+
 # Others
 *.log
