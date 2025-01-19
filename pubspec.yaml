@@ -47,6 +47,9 @@ dependencies:
   url_launcher: ^6.2.4
   googleapis: ^12.0.0
   extension_google_sign_in_as_googleapis_auth: ^2.0.12
+  open_file: ^3.3.2
+  elegant_notification: ^2.4.1
+  shared_preferences: ^2.3.5
   
 
 dev_dependencies:

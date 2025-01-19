@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'dart:async';
 
 enum TokenServiceError {
   insufficientTokens,
@@ -27,82 +28,158 @@ class TokenCost {
 }
 
 class TokenService {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  
-  Stream<int> get tokenBalance {
-    final userId = _auth.currentUser?.uid;
-    if (userId == null) return Stream.value(0);
-    
-    return _firestore
-        .collection('users')
-        .doc(userId)
-        .snapshots()
-        .map((doc) => doc.data()?['tokens'] as int? ?? 0);
-  }
+  final FirebaseAuth _auth;
+  final FirebaseFirestore _firestore;
+  final _tokenBalanceController = StreamController<int>.broadcast();
 
-  Future<void> checkTokenBalance(int requiredTokens) async {
-    final userId = _auth.currentUser?.uid;
-    if (userId == null) {
-      throw TokenServiceException(
-        TokenServiceError.serverError,
-        'User not authenticated',
-      );
-    }
+  TokenService(this._auth, this._firestore);
 
+  Stream<int> get tokenBalance => _tokenBalanceController.stream;
+
+  Future<void> checkTokenBalance(int amount) async {
     try {
-      final doc = await _firestore.collection('users').doc(userId).get();
-      final currentTokens = doc.data()?['tokens'] as int? ?? 0;
+      final user = _auth.currentUser;
+      if (user == null) throw Exception('User not authenticated');
 
-      if (currentTokens < requiredTokens) {
-        throw TokenServiceException(
-          TokenServiceError.insufficientTokens,
-          'Insufficient tokens. Required: $requiredTokens, Available: $currentTokens',
-        );
+      final doc = await _firestore.collection('users').doc(user.uid).get();
+      if (!doc.exists) throw Exception('User document not found');
+
+      final balance = doc.data()?['tokens'] as int? ?? 0;
+      if (balance < amount) {
+        throw Exception('Insufficient tokens. Required: $amount, Available: $balance');
       }
     } catch (e) {
-      if (e is TokenServiceException) rethrow;
-      throw TokenServiceException(
-        TokenServiceError.networkError,
-        'Failed to check token balance: ${e.toString()}',
-      );
+      throw Exception('Failed to check token balance: ${e.toString()}');
     }
   }
 
-  Future<void> deductTokens(int amount, String serviceType) async {
-    final userId = _auth.currentUser?.uid;
-    if (userId == null) {
-      throw TokenServiceException(
-        TokenServiceError.serverError,
-        'User not authenticated',
-      );
-    }
-
-    final batch = _firestore.batch();
-    final userRef = _firestore.collection('users').doc(userId);
-    final usageRef = _firestore.collection('usage_history').doc();
-
+  Future<int> getTokenBalance() async {
     try {
-      // Create usage record
-      batch.set(usageRef, {
-        'userId': userId,
+      final user = _auth.currentUser;
+      if (user == null) throw Exception('User not authenticated');
+
+      final doc = await _firestore.collection('users').doc(user.uid).get();
+      if (!doc.exists) throw Exception('User document not found');
+
+      final balance = doc.data()?['tokens'] as int? ?? 0;
+      _tokenBalanceController.add(balance);
+      return balance;
+    } catch (e) {
+      throw Exception('Failed to get token balance: ${e.toString()}');
+    }
+  }
+
+  Future<void> deductTokens(
+    int amount,
+    String serviceType, {
+    String? prompt,
+    String? modelId,
+    String? outputUrl,
+    String? generatedFileName,
+    Map<String, dynamic>? serviceSpecificData,
+  }) async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) throw Exception('User not authenticated');
+
+      // Get current token balance first
+      final userDoc = await _firestore.collection('users').doc(user.uid).get();
+      if (!userDoc.exists) throw Exception('User document not found');
+
+      final currentBalance = userDoc.data()?['tokens'] as int? ?? 0;
+      if (currentBalance < amount) {
+        throw Exception('Insufficient tokens. Required: $amount, Available: $currentBalance');
+      }
+
+      // Get current timestamp
+      final now = DateTime.now();
+
+      // Prepare usage data
+      final Map<String, dynamic> usageData = {
+        'userId': user.uid,
+        'timestamp': FieldValue.serverTimestamp(),
+        'timestamp_iso': now.toIso8601String(),
         'serviceType': serviceType,
         'tokensUsed': amount,
-        'timestamp': FieldValue.serverTimestamp(),
-      });
+        'status': 'completed',
+        'tokenBalanceSnapshot': {
+          'before': currentBalance,
+          'deducted': amount,
+          'after': currentBalance - amount,
+          'timestamp': now.toIso8601String(),
+        },
+        'metadata': {
+          'device': 'web',
+          'version': '1.0.0',
+          'platform': 'web',
+          'created_at': now.toIso8601String(),
+          'updated_at': now.toIso8601String(),
+        },
+      };
 
-      // Update user's token balance
+      // Add optional fields if provided
+      if (prompt?.isNotEmpty == true) usageData['prompt'] = prompt;
+      if (modelId?.isNotEmpty == true) usageData['modelId'] = modelId;
+      if (outputUrl?.isNotEmpty == true) usageData['outputUrl'] = outputUrl;
+      if (generatedFileName?.isNotEmpty == true) usageData['generatedFileName'] = generatedFileName;
+
+      // Add service specific data if provided
+      if (serviceSpecificData != null && serviceSpecificData.isNotEmpty) {
+        serviceSpecificData.removeWhere((key, value) => value == null);
+        usageData['serviceData'] = {
+          ...serviceSpecificData,
+          'timestamp': now.toIso8601String(),
+        };
+      }
+
+      // Create usage history document
+      final usageRef = _firestore.collection('usage_history').doc();
+      final userRef = _firestore.collection('users').doc(user.uid);
+      
+      // Update token balance and create usage history in a batch
+      final batch = _firestore.batch();
+
+      // First update token balance
       batch.update(userRef, {
         'tokens': FieldValue.increment(-amount),
+        'last_token_update': FieldValue.serverTimestamp(),
       });
 
+      // Then create usage history
+      batch.set(usageRef, usageData);
+
+      // Then update token history array
+      batch.update(userRef, {
+        'token_history': FieldValue.arrayUnion([{
+          'amount': -amount,
+          'balance': currentBalance - amount,
+          'type': 'deduction',
+          'serviceType': serviceType,
+          'timestamp': FieldValue.serverTimestamp(),
+        }]),
+      });
+
+      // Commit the batch
       await batch.commit();
+      
+      // Notify listeners of token balance change
+      _tokenBalanceController.add(currentBalance - amount);
     } catch (e) {
-      throw TokenServiceException(
-        TokenServiceError.serverError,
-        'Failed to deduct tokens: ${e.toString()}',
-      );
+      print('Token deduction error: $e');
+      if (e.toString().contains('INVALID_ARGUMENT')) {
+        throw Exception('Failed to save usage history: Data too large');
+      } else if (e.toString().contains('NOT_FOUND')) {
+        throw Exception('User document not found');
+      } else if (e.toString().contains('PERMISSION_DENIED')) {
+        throw Exception('Permission denied: Please sign in again');
+      }
+      throw Exception('Failed to process tokens: ${e.toString()}');
     }
+  }
+
+  @override
+  void dispose() {
+    _tokenBalanceController.close();
   }
 
   Future<List<Map<String, dynamic>>> getRecentUsage() async {
@@ -114,20 +191,58 @@ class TokenService {
           .collection('usage_history')
           .where('userId', isEqualTo: userId)
           .orderBy('timestamp', descending: true)
-          .limit(5)
-          .get();
+          .limit(10)
+          .get()
+          .timeout(
+            Duration(seconds: 10),
+            onTimeout: () {
+              throw TokenServiceException(
+                TokenServiceError.serverError,
+                'Request timed out. The index might still be building.',
+              );
+            },
+          );
+
+      if (snapshot.docs.isEmpty) return [];
 
       return snapshot.docs.map((doc) {
         final data = doc.data();
-        return {
-          'serviceType': data['serviceType'],
-          'tokensUsed': data['tokensUsed'],
-          'timestamp': (data['timestamp'] as Timestamp).toDate(),
+        Map<String, dynamic> result = {
+          'id': doc.id,
+          'serviceType': data['serviceType'] ?? 'unknown',
+          'tokensUsed': data['tokensUsed'] ?? 0,
+          'timestamp': data['timestamp'] != null 
+              ? (data['timestamp'] as Timestamp).toDate()
+              : DateTime.now(),
+          'status': data['status'] ?? 'completed',
         };
+
+        // Add optional fields if they exist
+        if (data['prompt'] != null) result['prompt'] = data['prompt'];
+        if (data['outputUrl'] != null) result['outputUrl'] = data['outputUrl'];
+        if (data['errorMessage'] != null) result['errorMessage'] = data['errorMessage'];
+        if (data['generatedFileName'] != null) result['generatedFileName'] = data['generatedFileName'];
+        if (data['modelId'] != null) result['modelId'] = data['modelId'];
+        if (data['tokenBalanceSnapshot'] != null) result['tokenBalanceSnapshot'] = data['tokenBalanceSnapshot'];
+        if (data['metadata'] != null) result['metadata'] = data['metadata'];
+        if (data['serviceData'] != null) result['serviceData'] = data['serviceData'];
+
+        return result;
       }).toList();
     } catch (e) {
       print('Error fetching recent usage: $e');
-      return [];
+      if (e.toString().contains('failed-precondition') || 
+          e.toString().contains('requires an index')) {
+        throw TokenServiceException(
+          TokenServiceError.serverError,
+          'The system is being prepared for first use. Please try again in a few minutes.',
+        );
+      }
+      if (e is TokenServiceException) rethrow;
+      throw TokenServiceException(
+        TokenServiceError.networkError,
+        'Failed to fetch usage history. Please check your connection.',
+      );
     }
   }
 } 

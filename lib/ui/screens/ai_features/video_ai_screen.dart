@@ -249,7 +249,6 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> with SingleTicker
         final status = await ref.read(videoServiceProvider).getVideoStatus(_currentVideoId!);
         
         if (status['status'] == VideoGenerationService.STATUS_COMPLETED) {
-          // Deduct tokens only on successful generation
           await ref.read(tokenServiceProvider).deductTokens(
             TokenCost.video,
             'video',
@@ -261,24 +260,7 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> with SingleTicker
           });
           timer.cancel();
           
-          // Show success message
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Row(
-                  children: [
-                    Icon(Icons.check_circle, color: Colors.white),
-                    SizedBox(width: 8),
-                    Text('Video generated successfully! (-${TokenCost.video} tokens)'),
-                  ],
-                ),
-                backgroundColor: Colors.green,
-                duration: Duration(seconds: 3),
-              ),
-            );
-          }
-          
-          // Refresh video list to show new video
+          _showSuccessNotification('Video generated successfully! (-${TokenCost.video} tokens)');
           await _refreshVideos();
         } else if (status['status'] == VideoGenerationService.STATUS_FAILED) {
           setState(() {
@@ -287,21 +269,7 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> with SingleTicker
           });
           timer.cancel();
           
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Row(
-                  children: [
-                    Icon(Icons.error, color: Colors.white),
-                    SizedBox(width: 8),
-                    Text('Video generation failed. No tokens deducted.'),
-                  ],
-                ),
-                backgroundColor: Colors.red,
-                duration: Duration(seconds: 3),
-              ),
-            );
-          }
+          _showErrorNotification('Video generation failed. No tokens deducted.');
         }
       } catch (e) {
         print('Polling error: $e');
@@ -607,11 +575,9 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> with SingleTicker
                       ),
                     SizedBox(height: 8),
                     Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Expanded(
                           child: Row(
-                            mainAxisSize: MainAxisSize.min,
                             children: [
                               Icon(
                                 video['status']?.toLowerCase() == 'completed'
@@ -623,16 +589,22 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> with SingleTicker
                                 size: 16,
                               ),
                               SizedBox(width: 4),
-                              Expanded(
-                                child: Text(
-                                  video['status'] ?? 'Unknown',
-                                  style: TextStyle(
-                                    color: _getStatusColor(video['status']),
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 12,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                  maxLines: 1,
+                              Text(
+                                video['status'] ?? 'Unknown',
+                                style: TextStyle(
+                                  color: _getStatusColor(video['status']),
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              SizedBox(width: 12),
+                              Icon(Icons.token, size: 14, color: Colors.amber),
+                              SizedBox(width: 4),
+                              Text(
+                                '${TokenCost.video}',
+                                style: TextStyle(
+                                  color: Colors.amber,
+                                  fontSize: 12,
                                 ),
                               ),
                             ],
@@ -663,10 +635,6 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> with SingleTicker
         title: Text('Video Generation'),
         centerTitle: true,
         actions: [
-          Padding(
-            padding: EdgeInsets.only(right: 16),
-            child: _buildTokenBalance(),
-          ),
           IconButton(
             icon: Icon(Icons.help_outline),
             onPressed: () {
@@ -850,12 +818,18 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> with SingleTicker
                                   ),
                                 ),
                                 SizedBox(height: 4),
-                                Text(
-                                  'Create stunning videos with AI',
-                                  style: TextStyle(
-                                    color: Colors.grey[400],
-                                    fontSize: 12,
-                                  ),
+                                Row(
+                                  children: [
+                                    Icon(Icons.token, size: 14, color: Colors.amber),
+                                    SizedBox(width: 4),
+                                    Text(
+                                      '${TokenCost.video} tokens per generation',
+                                      style: TextStyle(
+                                        color: Colors.amber,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
@@ -886,10 +860,15 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> with SingleTicker
                               ),
                               borderRadius: BorderRadius.circular(8),
                             ),
-                            child: IconButton(
-                              icon: Icon(Icons.movie_filter, color: Colors.white),
-                              onPressed: _generateVideo,
-                              padding: EdgeInsets.zero,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: Icon(Icons.movie_filter, color: Colors.white),
+                                  onPressed: _generateVideo,
+                                  padding: EdgeInsets.zero,
+                                ),
+                              ],
                             ),
                           ),
                         ),
@@ -908,9 +887,22 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> with SingleTicker
                         builder: (context, child) {
                           return Transform.translate(
                             offset: Offset(0, _animation.value),
-                            child: Image.asset(
-                              'assets/bot_image.png',
-                              height: 120,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Image.asset(
+                                  'assets/bot_image.png',
+                                  height: 120,
+                                ),
+                                SizedBox(height: 24),
+                                Text(
+                                  'Start generating amazing videos!',
+                                  style: TextStyle(
+                                    color: Colors.grey[400],
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ],
                             ),
                           );
                         },
@@ -1258,6 +1250,80 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> with SingleTicker
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  void _showSuccessNotification(String message) {
+    if (!mounted) return;
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        width: MediaQuery.of(context).size.width * 0.9,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+        ),
+        content: Row(
+          children: [
+            Container(
+              padding: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(Icons.check_circle, color: Colors.green, size: 20),
+            ),
+            SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                message,
+                style: TextStyle(color: Colors.white),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 2,
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: Colors.grey[900],
+        duration: Duration(seconds: 4),
+      ),
+    );
+  }
+
+  void _showErrorNotification(String message) {
+    if (!mounted) return;
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        width: MediaQuery.of(context).size.width * 0.9,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+        ),
+        content: Row(
+          children: [
+            Container(
+              padding: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.red.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(Icons.error_outline, color: Colors.red, size: 20),
+            ),
+            SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                message,
+                style: TextStyle(color: Colors.white),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 2,
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: Colors.grey[900],
+        duration: Duration(seconds: 4),
       ),
     );
   }

@@ -5,98 +5,205 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+enum ImageModel {
+  stable_diffusion_v3,
+  core_diffusion,
+  ultra_diffusion,
+}
+
+class ImageGenerationException implements Exception {
+  final String message;
+  final String? technicalDetails;
+
+  ImageGenerationException(this.message, {this.technicalDetails}) {
+    if (technicalDetails != null) {
+      print('ImageService Error: $message');
+      print('Technical Details: $technicalDetails');
+    }
+  }
+
+  @override
+  String toString() => message;
+}
+
 class ImageGenerationService {
-  final String deepAiApiKey = '8dd3a047-b8a1-4aa0-b85f-6bb2b71cf886';
+  final String apiKey = dotenv.env['STABILITY_API_KEY'] ?? '';
+  final String baseUrl = 'https://api.stability.ai/v1';
 
-  Future<String> generateImage(String prompt) async {
-    try {
-      print('Generating image with prompt: $prompt');
+  Map<String, String> get _headers => {
+    'Authorization': 'Bearer $apiKey',
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  };
 
-      var request = http.MultipartRequest(
-        'POST',
-        Uri.parse('https://api.deepai.org/api/text2img'),
+  Future<String> generateImage(String prompt, {
+    ImageModel model = ImageModel.stable_diffusion_v3,
+    int width = 1024,
+    int height = 1024,
+    int steps = 30,
+    double cfgScale = 7.0,
+    String style = 'enhance',
+    int samples = 1,
+  }) async {
+    if (apiKey.isEmpty) {
+      throw ImageGenerationException(
+        'API key is missing',
+        technicalDetails: 'Stability AI API key not found in environment variables',
       );
+    }
 
-      // Add the API key header
-      request.headers['api-key'] = deepAiApiKey;
+    try {
+      final endpoint = _getEndpoint(model);
+      final uri = Uri.parse('$baseUrl$endpoint');
 
-      // Add the text field
-      request.fields['text'] = prompt;
+      final Map<String, dynamic> requestBody = {
+        'text_prompts': [
+          {
+            'text': prompt,
+          }
+        ],
+        'cfg_scale': cfgScale,
+        'height': height,
+        'width': width,
+        'steps': steps,
+        'samples': samples,
+        'style_preset': style,
+      };
 
-      print('Sending request to DeepAI...');
-      final streamedResponse = await request.send();
-      final response = await http.Response.fromStream(streamedResponse);
+      print('Sending request to: $uri');
+      print('Request body: ${jsonEncode(requestBody)}');
+
+      final response = await http.post(
+        uri,
+        headers: _headers,
+        body: jsonEncode(requestBody),
+      ).timeout(
+        Duration(seconds: 60),
+        onTimeout: () {
+          throw ImageGenerationException(
+            'Request timed out',
+            technicalDetails: 'Generation request timed out after 60 seconds',
+          );
+        },
+      );
 
       print('Response status: ${response.statusCode}');
       print('Response body: ${response.body}');
-      print('Response headers: ${response.headers}');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        print('Parsed response data: $data');
-        
-        if (data['output_url'] != null) {
-          print('Generated image URL: ${data['output_url']}');
-          return data['output_url'];
+        final images = data['artifacts'] as List;
+        if (images.isNotEmpty) {
+          final base64Image = images[0]['base64'];
+          return 'data:image/png;base64,$base64Image';
         }
-        throw Exception('No image URL in response: $data');
+        throw ImageGenerationException(
+          'No image generated',
+          technicalDetails: 'Response contained no images',
+        );
       } else {
-        Map<String, dynamic> errorData;
-        try {
-          errorData = jsonDecode(response.body);
-          print('Error data: $errorData');
-        } catch (e) {
-          print('Error parsing error response: $e');
-          errorData = {'error': 'Failed to parse error response'};
-        }
-
-        String errorMessage = errorData['error'] ?? 'Unknown error occurred';
-        print('Error message from API: $errorMessage');
-        
-        if (response.statusCode == 401) {
-          throw Exception('API key invalid or expired. Please check your API key.');
-        } else if (response.statusCode == 429) {
-          throw Exception('Rate limit exceeded. Please try again later.');
-        }
-        
-        throw Exception('API Error (${response.statusCode}): $errorMessage');
+        _handleApiError(response.statusCode, response.body);
       }
     } catch (e) {
-      print('Error details: $e');
-      if (e.toString().contains('unexpected end of input')) {
-        throw Exception('Invalid response from API. Please try again.');
+      if (e is ImageGenerationException) rethrow;
+      
+      if (e.toString().contains('SocketException')) {
+        throw ImageGenerationException(
+          'Network connection error',
+          technicalDetails: 'Socket Exception: $e',
+        );
       }
-      throw Exception('Error generating image: ${e.toString().replaceAll('Exception: ', '')}');
+      
+      throw ImageGenerationException(
+        'Failed to generate image',
+        technicalDetails: e.toString(),
+      );
+    }
+
+    throw ImageGenerationException(
+      'Unknown error occurred',
+      technicalDetails: 'No response data available',
+    );
+  }
+
+  String _getEndpoint(ImageModel model) {
+    switch (model) {
+      case ImageModel.stable_diffusion_v3:
+        return '/generation/stable-diffusion-xl-1024-v1-0/text-to-image';
+      case ImageModel.core_diffusion:
+        return '/generation/stable-diffusion-v1-6/text-to-image';
+      case ImageModel.ultra_diffusion:
+        return '/generation/stable-diffusion-xl-1024-v1-0/text-to-image';
+    }
+  }
+
+  void _handleApiError(int statusCode, String body) {
+    Map<String, dynamic> errorData;
+    try {
+      errorData = jsonDecode(body);
+    } catch (_) {
+      errorData = {'message': 'Unknown error occurred'};
+    }
+
+    final message = errorData['message'] ?? 'Unknown error occurred';
+    
+    switch (statusCode) {
+      case 400:
+        throw ImageGenerationException(
+          'Invalid request parameters',
+          technicalDetails: message,
+        );
+      case 401:
+        throw ImageGenerationException(
+          'Invalid API key',
+          technicalDetails: message,
+        );
+      case 403:
+        throw ImageGenerationException(
+          'Access denied',
+          technicalDetails: message,
+        );
+      case 429:
+        throw ImageGenerationException(
+          'Rate limit exceeded',
+          technicalDetails: message,
+        );
+      default:
+        throw ImageGenerationException(
+          'Server error occurred',
+          technicalDetails: 'Status code: $statusCode, Message: $message',
+        );
     }
   }
 
   Future<File> downloadImage(String imageUrl) async {
     try {
-      print('Downloading image from: $imageUrl');
-      final response = await http.get(Uri.parse(imageUrl));
+      final bytes = base64.decode(imageUrl.split(',')[1]);
       
-      if (response.statusCode != 200) {
-        throw Exception('Failed to download image: ${response.statusCode}');
-      }
-
-      final documentsDir = await getApplicationDocumentsDirectory();
+      final directory = await getApplicationDocumentsDirectory();
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final file = File('${documentsDir.path}/generated_image_$timestamp.png');
-      await file.writeAsBytes(response.bodyBytes);
+      final file = File('${directory.path}/generated_image_$timestamp.png');
+      
+      await file.writeAsBytes(bytes);
       print('Image saved to: ${file.path}');
       return file;
     } catch (e) {
-      print('Download error: $e');
-      throw Exception('Error downloading image: $e');
+      throw ImageGenerationException(
+        'Failed to save image',
+        technicalDetails: e.toString(),
+      );
     }
   }
 
-  Future<void> saveToGoogleDrive(File imageFile) async {
-    // TODO: Implement Google Drive integration
-    // For now, we'll just open the file in the default viewer
+  Future<void> openImage(File imageFile) async {
     final uri = Uri.file(imageFile.path);
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri);
+    } else {
+      throw ImageGenerationException(
+        'Could not open image',
+        technicalDetails: 'Failed to launch URL: $uri',
+      );
     }
   }
 } 

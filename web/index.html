@@ -26,13 +26,47 @@
   <meta name="apple-mobile-web-app-title" content="core_ai_studios">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
+  <!-- Google Sign-In client ID meta tag -->
+  <meta name="google-signin-client_id" content="461974819621-h04kt8h0qbo6lfsd4k680shlinjrvtjv.apps.googleusercontent.com">
+  
+  <!-- Google Sign-In API -->
+  <script src="https://apis.google.com/js/platform.js" async defer></script>
+
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
   <title>core_ai_studios</title>
   <link rel="manifest" href="manifest.json">
+
+  <script>
+    // The value below is injected by flutter build, do not touch.
+    const serviceWorkerVersion = null;
+  </script>
+  <!-- This script adds the flutter initialization JS code -->
+  <script src="flutter.js" defer></script>
 </head>
 <body>
-  <script src="flutter_bootstrap.js" async></script>
+  <script>
+    window.addEventListener('load', function(ev) {
+      // Initialize google sign-in
+      window.gapi?.load('auth2', function() {
+        window.gapi.auth2.init({
+          client_id: '461974819621-h04kt8h0qbo6lfsd4k680shlinjrvtjv.apps.googleusercontent.com'
+        });
+      });
+
+      // Download main.dart.js
+      _flutter.loader.loadEntrypoint({
+        serviceWorker: {
+          serviceWorkerVersion: serviceWorkerVersion,
+        },
+        onEntrypointLoaded: function(engineInitializer) {
+          engineInitializer.initializeEngine().then(function(appRunner) {
+            appRunner.runApp();
+          });
+        }
+      });
+    });
+  </script>
 </body>
 </html>
