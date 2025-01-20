@@ -16,6 +16,7 @@ import 'package:elegant_notification/resources/arrays.dart';
 import 'package:flutter/rendering.dart';
 import 'dart:ui';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../../services/notification_service.dart';
 
 final imageGenerationServiceProvider =
     Provider((ref) => ImageGenerationService());
@@ -134,13 +135,19 @@ class _ImageAIScreenState extends ConsumerState<ImageAIScreen>
   Future<void> _generateImage() async {
     if (_promptController.text.trim().isEmpty || _isGenerating) return;
 
+    // Dismiss keyboard
+    FocusScope.of(context).unfocus();
+
     final prompt = _promptController.text.trim();
     final modelId = _selectedModel.toString().split('.').last;
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final fileName = 'stability_ai_$timestamp.png';
 
     try {
-      await ref.read(tokenServiceProvider).checkTokenBalance(_currentTokenCost);
+      await ref.read(tokenServiceProvider).checkTokenBalance(
+        _currentTokenCost,
+        serviceType: 'Image Generation',
+      );
 
       setState(() {
         _isGenerating = true;
@@ -207,25 +214,45 @@ class _ImageAIScreenState extends ConsumerState<ImageAIScreen>
 
       _showSuccessNotification();
     } catch (e) {
-      String errorMessage = 'An error occurred';
-      
-      if (e.toString().contains('Insufficient tokens')) {
-        errorMessage = 'Insufficient tokens. Please purchase more tokens to continue.';
-      } else if (e.toString().contains('User not authenticated')) {
-        errorMessage = 'Please sign in to generate images.';
-      } else if (e.toString().contains('Failed to generate image')) {
-        errorMessage = 'Failed to generate image. Please try again.';
-      } else if (e.toString().contains('Failed to deduct tokens')) {
-        errorMessage = 'Error processing tokens. Please try again.';
-      } else if (e.toString().contains('Failed to save usage history')) {
-        errorMessage = 'Error saving generation history. Please try again.';
+      if (e is TokenServiceException) {
+        if (e.error == TokenServiceError.insufficientTokens) {
+          final balance = await ref.read(tokenServiceProvider).getTokenBalance();
+          NotificationService.showInsufficientBalance(
+            context: context,
+            required: _currentTokenCost,
+            current: balance,
+            serviceType: 'Image Generation',
+            onPurchase: () {
+              Navigator.pushNamed(
+                context,
+                '/profile',
+                arguments: 'showTokens',
+              );
+            },
+          );
+        } else {
+          NotificationService.showError(
+            context: context,
+            title: 'Token Error',
+            message: e.message,
+            showPopup: true,
+          );
+        }
+      } else {
+        NotificationService.showError(
+          context: context,
+          title: 'Generation Error',
+          message: 'Failed to generate image.',
+          technicalDetails: e.toString(),
+          showPopup: true,
+        );
       }
-      
-      _showErrorNotification(errorMessage);
     } finally {
-      setState(() {
-        _isGenerating = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isGenerating = false;
+        });
+      }
     }
   }
 
@@ -511,24 +538,29 @@ class _ImageAIScreenState extends ConsumerState<ImageAIScreen>
                     AnimatedBuilder(
                       animation: _animation,
                       builder: (context, child) {
-                        return Transform.translate(
-                          offset: Offset(0, _animation.value),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Image.asset(
-                                'assets/bot_image.png',
-                                height: 120,
+                        return Container(
+                          height: MediaQuery.of(context).size.height * 0.4,
+                          child: Center(
+                            child: Transform.translate(
+                              offset: Offset(0, _animation.value),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Image.asset(
+                                    'assets/bot_image.png',
+                                    height: 120,
+                                  ),
+                                  SizedBox(height: 16),
+                                  Text(
+                                    'Enter a prompt to generate an image',
+                                    style: TextStyle(
+                                      color: Colors.grey[400],
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ],
                               ),
-                              SizedBox(height: 16),
-                              Text(
-                                'Enter a prompt to generate an image',
-                                style: TextStyle(
-                                  color: Colors.grey[400],
-                                  fontSize: 14,
-                                ),
-                              ),
-                            ],
+                            ),
                           ),
                         );
                       },

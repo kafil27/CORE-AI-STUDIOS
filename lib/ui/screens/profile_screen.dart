@@ -19,12 +19,19 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   int _selectedTokenAmount = 0;
   bool _isRazorpayInitialized = false;
   String? _razorpayKey;
+  final ScrollController _scrollController = ScrollController();
+  final GlobalKey _tokenSectionKey = GlobalKey();
 
   @override
   void initState() {
     super.initState();
     _initializeRazorpay();
     _loadRazorpayKey();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (ModalRoute.of(context)?.settings.arguments == 'showTokens') {
+        _scrollToTokenSection();
+      }
+    });
   }
 
   Future<void> _loadRazorpayKey() async {
@@ -65,6 +72,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     if (_isRazorpayInitialized) {
       _razorpay.clear();
     }
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -139,6 +147,17 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     }
   }
 
+  void _scrollToTokenSection() {
+    final context = _tokenSectionKey.currentContext;
+    if (context != null) {
+      Scrollable.ensureVisible(
+        context,
+        duration: Duration(milliseconds: 500),
+        curve: Curves.easeInOut,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final userAsyncValue = ref.watch(userProvider);
@@ -159,7 +178,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   }
 
   Widget _buildProfileContent(UserModel user) {
-    return Padding(
+    return SingleChildScrollView(
+      controller: _scrollController,
       padding: const EdgeInsets.all(16.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -189,25 +209,56 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
   Widget _buildTokenSection(int tokens) {
     return Container(
+      key: _tokenSectionKey,
       padding: const EdgeInsets.all(16.0),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(15.0),
         color: Colors.grey[900],
+        border: Border.all(
+          color: Colors.amber.withOpacity(0.2),
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.amber.withOpacity(0.05),
+            blurRadius: 10,
+            spreadRadius: 2,
+          ),
+        ],
       ),
       child: Column(
         children: [
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.token, color: Colors.amber),
+              Icon(Icons.token_rounded, color: Colors.amber, size: 28),
               const SizedBox(width: 8),
-              Text('Tokens: $tokens', style: TextStyle(fontSize: 18)),
+              Text(
+                'Tokens: $tokens',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 16),
-          ElevatedButton(
-            onPressed: () => _showPurchaseOptions(),
-            child: Text('Purchase More Tokens ₹'
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: () => _showPurchaseOptions(),
+              icon: Icon(Icons.add_circle_outline_rounded),
+              label: Text('Add More Tokens'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.amber.withOpacity(0.2),
+                foregroundColor: Colors.amber,
+                padding: EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 0,
+              ),
             ),
           ),
         ],

@@ -50,6 +50,11 @@ dependencies:
   open_file: ^3.3.2
   elegant_notification: ^2.4.1
   shared_preferences: ^2.3.5
+  connectivity_plus: ^5.0.2
+  vibration: ^1.8.4
+  lottie: ^3.1.0
+  audioplayers: ^5.2.1
+  permission_handler: ^11.3.0
   
 
 dev_dependencies:
@@ -116,6 +121,11 @@ flutter:
     - assets/
     - assets/bot_image.png
     - assets/google_logo.png
+    - assets/error_404.png
+    - assets/error_503.png
+    - assets/maintenance.png
+    - assets/bad_error.png
+    - assets/success.mp3
     - .env
 
 flutter_native_splash:

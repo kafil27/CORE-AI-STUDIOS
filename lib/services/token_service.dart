@@ -36,7 +36,7 @@ class TokenService {
 
   Stream<int> get tokenBalance => _tokenBalanceController.stream;
 
-  Future<void> checkTokenBalance(int amount) async {
+  Future<void> checkTokenBalance(int amount, {String? serviceType}) async {
     try {
       final user = _auth.currentUser;
       if (user == null) throw Exception('User not authenticated');
@@ -46,10 +46,17 @@ class TokenService {
 
       final balance = doc.data()?['tokens'] as int? ?? 0;
       if (balance < amount) {
-        throw Exception('Insufficient tokens. Required: $amount, Available: $balance');
+        throw TokenServiceException(
+          TokenServiceError.insufficientTokens,
+          'Insufficient tokens. Required: $amount, Available: $balance',
+        );
       }
     } catch (e) {
-      throw Exception('Failed to check token balance: ${e.toString()}');
+      if (e is TokenServiceException) rethrow;
+      throw TokenServiceException(
+        TokenServiceError.unknownError,
+        'Failed to check token balance: ${e.toString()}',
+      );
     }
   }
 
@@ -93,12 +100,17 @@ class TokenService {
 
       // Get current timestamp
       final now = DateTime.now();
+      final isoString = now.toIso8601String();
+
+      // Create usage history document
+      final usageRef = _firestore.collection('usage_history').doc();
+      final userRef = _firestore.collection('users').doc(user.uid);
 
       // Prepare usage data
       final Map<String, dynamic> usageData = {
         'userId': user.uid,
-        'timestamp': FieldValue.serverTimestamp(),
-        'timestamp_iso': now.toIso8601String(),
+        'timestamp': now.millisecondsSinceEpoch,
+        'timestamp_iso': isoString,
         'serviceType': serviceType,
         'tokensUsed': amount,
         'status': 'completed',
@@ -106,14 +118,14 @@ class TokenService {
           'before': currentBalance,
           'deducted': amount,
           'after': currentBalance - amount,
-          'timestamp': now.toIso8601String(),
+          'timestamp': isoString,
         },
         'metadata': {
           'device': 'web',
           'version': '1.0.0',
           'platform': 'web',
-          'created_at': now.toIso8601String(),
-          'updated_at': now.toIso8601String(),
+          'created_at': isoString,
+          'updated_at': isoString,
         },
       };
 
@@ -128,36 +140,28 @@ class TokenService {
         serviceSpecificData.removeWhere((key, value) => value == null);
         usageData['serviceData'] = {
           ...serviceSpecificData,
-          'timestamp': now.toIso8601String(),
+          'timestamp': isoString,
         };
       }
 
-      // Create usage history document
-      final usageRef = _firestore.collection('usage_history').doc();
-      final userRef = _firestore.collection('users').doc(user.uid);
-      
       // Update token balance and create usage history in a batch
       final batch = _firestore.batch();
 
-      // First update token balance
+      // Update user document
       batch.update(userRef, {
-        'tokens': FieldValue.increment(-amount),
-        'last_token_update': FieldValue.serverTimestamp(),
-      });
-
-      // Then create usage history
-      batch.set(usageRef, usageData);
-
-      // Then update token history array
-      batch.update(userRef, {
+        'tokens': currentBalance - amount,
+        'last_token_update': now.millisecondsSinceEpoch,
         'token_history': FieldValue.arrayUnion([{
           'amount': -amount,
           'balance': currentBalance - amount,
           'type': 'deduction',
           'serviceType': serviceType,
-          'timestamp': FieldValue.serverTimestamp(),
+          'timestamp': now.millisecondsSinceEpoch,
         }]),
       });
+
+      // Create usage history
+      batch.set(usageRef, usageData);
 
       // Commit the batch
       await batch.commit();

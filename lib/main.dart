@@ -8,6 +8,7 @@ import 'firebase_options.dart';
 import 'ui/screens/login_screen_mobile.dart';
 import 'ui/screens/home_screen.dart'; // Import your home screen
 import 'package:core_ai_studios/controllers/auth_controller.dart';
+import 'services/notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,6 +20,7 @@ void main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
   await dotenv.load(fileName: ".env");
+  await NotificationService.initialize();
   runApp(ProviderScope(child: MyApp()));
 }
 
