@@ -146,8 +146,11 @@ class InsufficientBalancePopup extends StatelessWidget {
                 width: double.infinity,
                 child: ElevatedButton.icon(
                   onPressed: () {
-                    Navigator.pop(context);
-                    onPurchaseTokens();
+                    Navigator.of(context).pop();
+                    Navigator.of(context).pushNamed(
+                      '/profile',
+                      arguments: 'showTokens',
+                    );
                   },
                   icon: Icon(Icons.add_circle_outline_rounded),
                   label: Text('Add More Tokens'),

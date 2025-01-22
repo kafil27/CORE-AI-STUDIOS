@@ -10,6 +10,13 @@ import 'package:core_ai_studios/services/firestore_service.dart';
 import 'package:core_ai_studios/controllers/auth_controller.dart';
 
 class ProfileScreen extends ConsumerStatefulWidget {
+  final bool showTokens;
+  
+  const ProfileScreen({
+    Key? key,
+    this.showTokens = false,
+  }) : super(key: key);
+
   @override
   _ProfileScreenState createState() => _ProfileScreenState();
 }
@@ -21,17 +28,18 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   String? _razorpayKey;
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _tokenSectionKey = GlobalKey();
+  final GlobalKey _tokensKey = GlobalKey();
 
   @override
   void initState() {
     super.initState();
     _initializeRazorpay();
     _loadRazorpayKey();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (ModalRoute.of(context)?.settings.arguments == 'showTokens') {
+    if (widget.showTokens) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
         _scrollToTokenSection();
-      }
-    });
+      });
+    }
   }
 
   Future<void> _loadRazorpayKey() async {
@@ -148,7 +156,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   }
 
   void _scrollToTokenSection() {
-    final context = _tokenSectionKey.currentContext;
+    final context = _tokensKey.currentContext;
     if (context != null) {
       Scrollable.ensureVisible(
         context,
@@ -209,7 +217,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
   Widget _buildTokenSection(int tokens) {
     return Container(
-      key: _tokenSectionKey,
+      key: _tokensKey,
       padding: const EdgeInsets.all(16.0),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(15.0),

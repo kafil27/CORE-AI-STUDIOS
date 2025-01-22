@@ -7,6 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'firebase_options.dart';
 import 'ui/screens/login_screen_mobile.dart';
 import 'ui/screens/home_screen.dart'; // Import your home screen
+import 'ui/screens/profile_screen.dart';
 import 'package:core_ai_studios/controllers/auth_controller.dart';
 import 'services/notification_service.dart';
 
@@ -51,6 +52,18 @@ class MyApp extends ConsumerWidget {
       ),
       themeMode: themeMode,
       initialRoute: '/',
+      onGenerateRoute: (settings) {
+        if (settings.name == '/profile') {
+          return MaterialPageRoute(
+            builder: (context) => ProfileScreen(
+              showTokens: settings.arguments == 'showTokens',
+            ),
+            settings: settings,
+          );
+        }
+        // Add other routes as needed
+        return null;
+      },
       routes: {
         '/': (context) => AuthWrapper(),
         '/login': (context) => LoginScreen(),
