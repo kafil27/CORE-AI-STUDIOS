@@ -20,6 +20,10 @@
             }
         }
     },
+    "firestore": {
+        "rules": "firestore.rules",
+        "indexes": "firestore.indexes.json"
+    },
     "functions": {
         "source": "functions",
         "runtime": "nodejs18",
@@ -37,11 +41,15 @@
         "functions": {
             "port": 5001
         },
+        "firestore": {
+            "port": 8080
+        },
         "storage": {
             "port": 9199
         },
         "ui": {
-            "enabled": true
+            "enabled": true,
+            "port": 4000
         }
     }
 }

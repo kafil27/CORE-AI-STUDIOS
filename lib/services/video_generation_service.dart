@@ -4,6 +4,9 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter/material.dart';
+import '../ui/widgets/custom_error_popup.dart';
+import 'notification_service.dart';
 
 enum VideoServiceError {
   apiKeyMissing,
@@ -52,8 +55,16 @@ class VideoGenerationService {
   // Generate video
   Future<Map<String, dynamic>> generateVideo({
     required String prompt,
+    required BuildContext context,
   }) async {
     if (predisApiKey.isEmpty || predisBrandId.isEmpty) {
+      NotificationService.showError(
+        context: context,
+        title: 'Configuration Error',
+        message: 'API configuration is missing',
+        errorType: ErrorType.apiNotFound,
+        technicalDetails: 'Predis API key or Brand ID not found in environment variables',
+      );
       throw VideoServiceException(
         VideoServiceError.apiKeyMissing,
         'API configuration missing',
@@ -86,6 +97,12 @@ class VideoGenerationService {
       ).timeout(
         Duration(minutes: 2),
         onTimeout: () {
+          NotificationService.showError(
+            context: context,
+            title: 'Request Timeout',
+            message: 'The request took too long to complete. Please try again.',
+            errorType: ErrorType.serviceError,
+          );
           throw VideoServiceException(
             VideoServiceError.timeoutError,
             'Request timed out. Please try again.',
@@ -99,17 +116,29 @@ class VideoGenerationService {
 
       if (response.statusCode == 200) {
         final responseData = jsonDecode(response.body);
+        NotificationService.showSuccess(
+          context: context,
+          title: 'Video Generation Started',
+          message: 'Your video is being generated. This may take a few minutes.',
+          playSound: true,
+        );
         return {
           'post_id': responseData['post_ids']?[0] ?? responseData['post_id'],
           'status': responseData['post_status'] ?? 'processing',
         };
       } else {
-        _handlePredisError(response.statusCode, jsonDecode(response.body));
+        _handlePredisError(response.statusCode, jsonDecode(response.body), context);
       }
     } catch (e) {
       if (e is VideoServiceException) rethrow;
       
       if (e.toString().contains('SocketException')) {
+        NotificationService.showError(
+          context: context,
+          title: 'Network Error',
+          message: 'Please check your internet connection and try again.',
+          errorType: ErrorType.networkError,
+        );
         throw VideoServiceException(
           VideoServiceError.networkError,
           'Network connection error',
@@ -117,6 +146,13 @@ class VideoGenerationService {
         );
       }
       
+      NotificationService.showError(
+        context: context,
+        title: 'Unexpected Error',
+        message: 'An unexpected error occurred. Please try again.',
+        errorType: ErrorType.otherError,
+        technicalDetails: e.toString(),
+      );
       throw VideoServiceException(
         VideoServiceError.unknownError,
         'An unexpected error occurred',
@@ -132,7 +168,7 @@ class VideoGenerationService {
   }
 
   // Get video status and details
-  Future<Map<String, dynamic>> getVideoStatus(String postId) async {
+  Future<Map<String, dynamic>> getVideoStatus(String postId, BuildContext context) async {
     try {
       final queryParams = {
         'brand_id': predisBrandId,
@@ -163,6 +199,15 @@ class VideoGenerationService {
           final thumbUrl = post['generated_media']?[0]?['thumb_url'];
           final caption = post['caption'];
           
+          if (post['status'] == STATUS_COMPLETED && videoUrl != null) {
+            NotificationService.showSuccess(
+              context: context,
+              title: 'Video Generated',
+              message: 'Your video is ready!',
+              playSound: true,
+            );
+          }
+          
           return {
             'status': post['status'],
             'video_url': videoUrl,
@@ -180,8 +225,18 @@ class VideoGenerationService {
   }
 
   // Get list of videos
-  Future<Map<String, dynamic>> listVideos({int page = 1, int limit = 10}) async {
+  Future<Map<String, dynamic>> listVideos({
+    required BuildContext context,
+    int page = 1,
+    int limit = 10,
+  }) async {
     if (predisApiKey.isEmpty || predisBrandId.isEmpty) {
+      NotificationService.showError(
+        context: context,
+        title: 'Configuration Error',
+        message: 'API configuration is missing',
+        errorType: ErrorType.apiNotFound,
+      );
       throw VideoServiceException(
         VideoServiceError.apiKeyMissing,
         'API configuration missing',
@@ -209,6 +264,12 @@ class VideoGenerationService {
       ).timeout(
         Duration(seconds: 15),
         onTimeout: () {
+          NotificationService.showError(
+            context: context,
+            title: 'Request Timeout',
+            message: 'Failed to load videos. Please try again.',
+            errorType: ErrorType.serviceError,
+          );
           throw VideoServiceException(
             VideoServiceError.timeoutError,
             'Request timed out. Please try again.',
@@ -244,12 +305,18 @@ class VideoGenerationService {
         };
       } else {
         final errorData = jsonDecode(response.body);
-        _handlePredisError(response.statusCode, errorData);
+        _handlePredisError(response.statusCode, errorData, context);
       }
     } catch (e) {
       if (e is VideoServiceException) rethrow;
       
       if (e.toString().contains('SocketException')) {
+        NotificationService.showError(
+          context: context,
+          title: 'Network Error',
+          message: 'Please check your internet connection and try again.',
+          errorType: ErrorType.networkError,
+        );
         throw VideoServiceException(
           VideoServiceError.networkError,
           'Network connection error',
@@ -257,6 +324,13 @@ class VideoGenerationService {
         );
       }
       
+      NotificationService.showError(
+        context: context,
+        title: 'Error Loading Videos',
+        message: 'An unexpected error occurred.',
+        errorType: ErrorType.otherError,
+        technicalDetails: e.toString(),
+      );
       throw VideoServiceException(
         VideoServiceError.unknownError,
         'An unexpected error occurred',
@@ -272,13 +346,19 @@ class VideoGenerationService {
   }
 
   // Download video to local storage with progress
-  Future<File> downloadVideo(String downloadUrl, {Function(double)? onProgress}) async {
+  Future<File> downloadVideo(String downloadUrl, BuildContext context, {Function(double)? onProgress}) async {
     try {
       final client = http.Client();
       final request = http.Request('GET', Uri.parse(downloadUrl));
       final response = await client.send(request).timeout(
         Duration(minutes: 5),
         onTimeout: () {
+          NotificationService.showError(
+            context: context,
+            title: 'Download Timeout',
+            message: 'Video download took too long. Please try again.',
+            errorType: ErrorType.serviceError,
+          );
           throw VideoServiceException(
             VideoServiceError.timeoutError,
             'Download timed out. Please try again.',
@@ -288,6 +368,12 @@ class VideoGenerationService {
       );
 
       if (response.statusCode != 200) {
+        NotificationService.showError(
+          context: context,
+          title: 'Download Failed',
+          message: 'Unable to download video.',
+          errorType: ErrorType.serviceError,
+        );
         throw VideoServiceException(
           VideoServiceError.serverError,
           'Unable to download video',
@@ -327,15 +413,27 @@ class VideoGenerationService {
         },
         onDone: () async {
           await fileStream.close();
+          NotificationService.showSuccess(
+            context: context,
+            title: 'Download Complete',
+            message: 'Video saved to Downloads folder',
+            playSound: true,
+          );
         },
         cancelOnError: true,
-      ).asFuture(); // Convert StreamSubscription to Future
+      ).asFuture();
 
       return file;
     } catch (e) {
       if (e is VideoServiceException) rethrow;
       
       if (e.toString().contains('SocketException')) {
+        NotificationService.showError(
+          context: context,
+          title: 'Network Error',
+          message: 'Download failed due to network error.',
+          errorType: ErrorType.networkError,
+        );
         throw VideoServiceException(
           VideoServiceError.networkError,
           'Network connection error',
@@ -343,6 +441,13 @@ class VideoGenerationService {
         );
       }
       
+      NotificationService.showError(
+        context: context,
+        title: 'Download Error',
+        message: 'Failed to download video.',
+        errorType: ErrorType.otherError,
+        technicalDetails: e.toString(),
+      );
       throw VideoServiceException(
         VideoServiceError.unknownError,
         'An unexpected error occurred',
@@ -351,7 +456,7 @@ class VideoGenerationService {
     }
   }
 
-  void _handlePredisError(int statusCode, Map<String, dynamic> errorData) {
+  void _handlePredisError(int statusCode, Map<String, dynamic> errorData, BuildContext context) {
     print('Handling error - Status code: $statusCode');
     print('Error data: $errorData');
     
@@ -364,12 +469,25 @@ class VideoGenerationService {
         if (limits != null) {
           final used = limits['api_request_in_last_one_hour'];
           final allowed = limits['total_requests_allowed_per_hour'];
+          NotificationService.showError(
+            context: context,
+            title: 'Rate Limit Exceeded',
+            message: 'Too many requests. Please try again later.',
+            errorType: ErrorType.serviceError,
+            technicalDetails: 'Used: $used, Allowed per hour: $allowed',
+          );
           throw VideoServiceException(
             VideoServiceError.rateLimitExceeded,
             'Too many requests. Please try again later.',
             technicalDetails: 'Used: $used, Allowed per hour: $allowed',
           );
         } else {
+          NotificationService.showError(
+            context: context,
+            title: 'Rate Limit Exceeded',
+            message: 'Too many requests. Please try again later.',
+            errorType: ErrorType.serviceError,
+          );
           throw VideoServiceException(
             VideoServiceError.rateLimitExceeded,
             'Too many requests. Please try again later.',
@@ -378,30 +496,62 @@ class VideoGenerationService {
         }
       case 400:
         if (errorMessage.contains('invalid brand_id')) {
+          NotificationService.showError(
+            context: context,
+            title: 'Configuration Error',
+            message: 'Invalid brand ID. Please contact support.',
+            errorType: ErrorType.apiNotFound,
+          );
           throw VideoServiceException(
             VideoServiceError.invalidBrandId,
             'Configuration error. Please contact support.',
             technicalDetails: errorMessage,
           );
         } else if (errorMessage.contains('reached your post generation limit')) {
+          NotificationService.showError(
+            context: context,
+            title: 'Generation Limit Reached',
+            message: 'You have reached your video generation limit.',
+            errorType: ErrorType.serviceError,
+          );
           throw VideoServiceException(
             VideoServiceError.generationLimitExceeded,
             'Video generation limit reached.',
             technicalDetails: errorMessage,
           );
         } else if (errorMessage.contains('3 posts inProgress')) {
+          NotificationService.showError(
+            context: context,
+            title: 'Queue Full',
+            message: 'Please wait for your current videos to complete.',
+            errorType: ErrorType.serviceError,
+          );
           throw VideoServiceException(
             VideoServiceError.maxQueueReached,
             'Please wait for current videos to complete.',
             technicalDetails: errorMessage,
           );
         }
+        NotificationService.showError(
+          context: context,
+          title: 'Request Error',
+          message: 'Unable to process request.',
+          errorType: ErrorType.serviceError,
+          technicalDetails: errorMessage,
+        );
         throw VideoServiceException(
           VideoServiceError.serverError,
           'Unable to process request.',
           technicalDetails: errorMessage,
         );
       default:
+        NotificationService.showError(
+          context: context,
+          title: 'Server Error',
+          message: 'Unable to connect to server.',
+          errorType: ErrorType.serviceError,
+          technicalDetails: 'Status code: $statusCode, Message: $errorMessage',
+        );
         throw VideoServiceException(
           VideoServiceError.serverError,
           'Unable to connect to server.',
@@ -410,27 +560,74 @@ class VideoGenerationService {
     }
   }
 
-  Future<void> cancelGeneration(String postId) async {
+  // Cancel video generation
+  Future<void> cancelGeneration(String postId, BuildContext context) async {
     try {
-      final response = await http.delete(
-        Uri.parse('$predisBaseUrl/posts/$postId'),
+      final Map<String, dynamic> requestBody = {
+        'brand_id': predisBrandId,
+        'post_id': postId,
+      };
+
+      final response = await http.post(
+        Uri.parse('$baseUrl/cancel_generation/'),
         headers: {
-          'Authorization': 'Bearer $predisApiKey',
-          'Accept': 'application/json',
+          ..._headers,
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode(requestBody),
+      ).timeout(
+        Duration(seconds: 15),
+        onTimeout: () {
+          NotificationService.showError(
+            context: context,
+            title: 'Request Timeout',
+            message: 'Failed to cancel generation. Please try again.',
+            errorType: ErrorType.serviceError,
+          );
+          throw VideoServiceException(
+            VideoServiceError.timeoutError,
+            'Request timed out. Please try again.',
+            technicalDetails: 'Cancel generation request timed out after 15 seconds',
+          );
         },
       );
 
-      if (response.statusCode != 200) {
-        throw VideoServiceException(
-          VideoServiceError.serverError,
-          'Failed to cancel video generation',
-          technicalDetails: 'Status code: ${response.statusCode}',
+      if (response.statusCode == 200) {
+        NotificationService.showSuccess(
+          context: context,
+          title: 'Generation Cancelled',
+          message: 'Video generation has been cancelled.',
         );
+      } else {
+        _handlePredisError(response.statusCode, jsonDecode(response.body), context);
       }
     } catch (e) {
+      if (e is VideoServiceException) rethrow;
+      
+      if (e.toString().contains('SocketException')) {
+        NotificationService.showError(
+          context: context,
+          title: 'Network Error',
+          message: 'Please check your internet connection and try again.',
+          errorType: ErrorType.networkError,
+        );
+        throw VideoServiceException(
+          VideoServiceError.networkError,
+          'Network connection error',
+          technicalDetails: 'Socket Exception: $e',
+        );
+      }
+      
+      NotificationService.showError(
+        context: context,
+        title: 'Cancel Error',
+        message: 'Failed to cancel video generation.',
+        errorType: ErrorType.otherError,
+        technicalDetails: e.toString(),
+      );
       throw VideoServiceException(
-        VideoServiceError.networkError,
-        'Failed to cancel video generation',
+        VideoServiceError.unknownError,
+        'An unexpected error occurred',
         technicalDetails: e.toString(),
       );
     }

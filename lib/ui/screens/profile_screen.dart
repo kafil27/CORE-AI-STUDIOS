@@ -188,20 +188,20 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   Widget _buildProfileContent(UserModel user) {
     return SingleChildScrollView(
       controller: _scrollController,
-      padding: const EdgeInsets.all(16.0),
-      child: Column(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          CircleAvatar(
-            radius: 50,
-            backgroundImage: user.profilePicture != null
-                ? NetworkImage(user.profilePicture!)
-                : null,
-            child: user.profilePicture == null
+              children: [
+                CircleAvatar(
+                  radius: 50,
+                  backgroundImage: user.profilePicture != null
+                      ? NetworkImage(user.profilePicture!)
+                      : null,
+                  child: user.profilePicture == null
                 ? Icon(Icons.person, size: 50)
-                : null,
-          ),
-          const SizedBox(height: 16),
+                      : null,
+                ),
+                const SizedBox(height: 16),
           Text(user.name ?? 'User Name', style: TextStyle(fontSize: 20)),
           Text(user.email, style: TextStyle(color: Colors.grey)),
           const SizedBox(height: 32),
@@ -250,8 +250,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 ),
               ),
             ],
-          ),
-          const SizedBox(height: 16),
+                ),
+                const SizedBox(height: 16),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
