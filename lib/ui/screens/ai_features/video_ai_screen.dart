@@ -1,21 +1,21 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../services/video_generation_service.dart';
-import '../../widgets/error_view.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../../../services/token_balance_service.dart';
 import '../../widgets/loading_overlay.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../services/notification_service.dart';
-import '../../widgets/custom_error_popup.dart';
-import '../../../services/downloads_service.dart';
 import '../../widgets/ai_prompt_input.dart';
 import '../../widgets/tips_section.dart';
 import '../../../providers/token_provider.dart';
+import '../../../services/generation_request_service.dart';
+import '../../../models/generation_request.dart';
+import '../../../models/generation_type.dart';
+import '../../widgets/generation_request_card.dart';
 
 final videoServiceProvider = Provider((ref) => VideoGenerationService());
+final generationRequestServiceProvider = Provider((ref) => GenerationRequestService());
 
 enum VideoModel {
   predisShort,
@@ -23,7 +23,7 @@ enum VideoModel {
 }
 
 class VideoAIScreen extends ConsumerStatefulWidget {
-  const VideoAIScreen({Key? key}) : super(key: key);
+  const VideoAIScreen({super.key});
 
   @override
   ConsumerState<VideoAIScreen> createState() => _VideoAIScreenState();
@@ -49,6 +49,8 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> with SingleTicker
   final int _maxPromptLength = 500; // Default max prompt length
   bool _isPromptTooLong = false;
   static const int _videosPerPage = 5;
+  final GenerationRequestService _requestService = GenerationRequestService();
+  String? _currentRequestId;
 
   @override
   void initState() {
@@ -119,257 +121,31 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> with SingleTicker
   }
 
   Future<void> _generateVideo(String prompt) async {
-    setState(() {
-      _isGenerating = true;
-      _currentVideoId = null;
-    });
-
-    try {
-      final result = await _videoService.generateVideo(
-        prompt: prompt,
-        context: context,
-      );
-
-      setState(() => _currentVideoId = result['post_id']);
-
-      // Start checking status
-      _checkVideoStatus();
-    } catch (e) {
-      setState(() => _isGenerating = false);
-    }
-  }
-
-  Future<void> _checkVideoStatus() async {
-    if (_currentVideoId == null || !_isGenerating) return;
-
-    try {
-      final status = await _videoService.getVideoStatus(_currentVideoId!, context);
-
-      if (status['status'] == 'completed') {
-        setState(() => _isGenerating = false);
-        
-        // Reset page counter and reload videos to show the new one
-        setState(() {
-          _currentPage = 1;
-          _videoList.clear();
-        });
-        
-        await _loadVideos();
-        
-        NotificationService.showSuccess(
-          title: 'Success',
-          message: 'Video generated successfully!',
-          context: context,
-        );
-      } else if (status['status'] == 'failed') {
-        setState(() => _isGenerating = false);
-        NotificationService.showError(
-          title: 'Generation Failed',
-          message: status['error'] ?? 'Failed to generate video. Please try again.',
-          context: context,
-        );
-      } else {
-        // Continue checking status
-        Future.delayed(const Duration(seconds: 5), _checkVideoStatus);
-      }
-    } catch (e) {
-      setState(() => _isGenerating = false);
-      NotificationService.showError(
-        title: 'Error',
-        message: 'Failed to check video status. Please try again.',
-        context: context,
-      );
-    }
-  }
-
-  Future<void> _cancelGeneration() async {
-    if (_currentVideoId == null) return;
-
-    try {
-      await _videoService.cancelGeneration(_currentVideoId!, context);
-      setState(() {
-        _isGenerating = false;
-        _currentVideoId = null;
-      });
-    } catch (e) {
-      NotificationService.showError(
-        title: 'Error',
-        message: 'Failed to cancel generation. Please try again.',
-        context: context,
-      );
-    }
-  }
-
-  Future<void> _downloadVideo(String url, String caption) async {
-    try {
-      await _videoService.downloadVideo(
-        url,
-        context,
-        onProgress: (progress) {
-          setState(() {
-            _downloadProgress[url] = progress;
-          });
-        },
-      );
-
-      setState(() {
-        _downloadProgress.remove(url);
-      });
-    } catch (e) {
-      setState(() {
-        _downloadProgress.remove(url);
-      });
-      NotificationService.showError(
-        title: 'Download Failed',
-        message: 'Failed to download video. Please try again.',
-        context: context,
-      );
-    }
-  }
-
-  Color _getStatusColor(String status) {
-    switch (status.toLowerCase()) {
-      case 'completed':
-        return Colors.green;
-      case 'failed':
-        return Colors.red;
-      case 'processing':
-        return Colors.orange;
-      default:
-        return Colors.grey;
-    }
-  }
-
-  Widget _buildVideoCard(Map<String, dynamic> video) {
-    final status = video['status'] ?? 'unknown';
-    final url = video['video_url'] ?? '';
-    final caption = video['caption'] ?? '';
-    final progress = _downloadProgress[url] ?? 0.0;
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      decoration: BoxDecoration(
-        color: Colors.grey[900],
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (video['thumbnail_url'] != null)
-            ClipRRect(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-              child: Image.network(
-                video['thumbnail_url'],
-                width: double.infinity,
-                height: 200,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) {
-                  return Container(
-                    width: double.infinity,
-                    height: 200,
-                    color: Colors.grey[800],
-                    child: const Icon(
-                      Icons.movie,
-                      size: 64,
-                      color: Colors.white54,
-                    ),
-                  );
-                },
-              ),
-            ),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: _getStatusColor(status).withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: _getStatusColor(status).withOpacity(0.5),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            status.toLowerCase() == 'completed'
-                                ? Icons.check_circle
-                                : status.toLowerCase() == 'failed'
-                                    ? Icons.error
-                                    : Icons.pending,
-                            size: 16,
-                            color: _getStatusColor(status),
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            status.toUpperCase(),
-                            style: TextStyle(
-                              color: _getStatusColor(status),
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Spacer(),
-                    if (status.toLowerCase() == 'completed')
-                      TextButton.icon(
-                        onPressed: progress > 0
-                            ? null
-                            : () => _downloadVideo(url, caption),
-                        icon: progress > 0
-                            ? SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  value: progress,
-                                  strokeWidth: 2,
-                                  valueColor:
-                                      const AlwaysStoppedAnimation<Color>(
-                                          Colors.blue),
-                                ),
-                              )
-                            : const Icon(Icons.download),
-                        label: Text(
-                          progress > 0
-                              ? '${(progress * 100).toInt()}%'
-                              : 'Download',
-                        ),
-                        style: TextButton.styleFrom(
-                          foregroundColor: Colors.blue,
-                        ),
-                      ),
-                  ],
-                ),
-                if (caption.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    caption,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
+    final requestId = await _requestService.submitRequest(
+      context: context,
+      prompt: prompt,
+      type: GenerationType.video,
+      metadata: {
+        'duration': 'short', // or 'long'
+        'quality': 'high',
+        'width': 1024,
+        'height': 1024,
+      },
     );
+
+    if (requestId != null) {
+      setState(() => _currentRequestId = requestId);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final currentRequest = _currentRequestId != null
+        ? ref.watch(generationRequestProvider(_currentRequestId!))
+        : const AsyncValue.data(null);
+    
+    final userRequests = ref.watch(userRequestsProvider);
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
@@ -408,7 +184,11 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> with SingleTicker
                       AIPromptInput(
                         type: AIGenerationType.video,
                         onSubmit: _generateVideo,
-                        isLoading: _isGenerating,
+                        isLoading: currentRequest.when(
+                          data: (request) => request?.isInProgress ?? false,
+                          loading: () => true,
+                          error: (_, __) => false,
+                        ),
                         hintText: 'Describe the video you want to generate...',
                         submitIcon: Icons.movie_creation_rounded,
                         submitLabel: 'Generate Video',
@@ -416,12 +196,12 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> with SingleTicker
                       ),
                       const SizedBox(height: 24),
                       // Tips Section
-                      TipsSection(
+                      const TipsSection(
                         title: 'Video Generation Tips',
                         icon: Icons.lightbulb_outline,
                         accentColor: Colors.amber,
                         isCollapsible: true,
-                        tips: const [
+                        tips: [
                           'Be specific about the scene, actions, and mood you want.',
                           'Include details about lighting, camera angles, and movement.',
                           'Specify any particular style or visual effects desired.',
@@ -430,10 +210,14 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> with SingleTicker
                         ],
                       ),
                       const SizedBox(height: 24),
-                      // Generated Videos
-                      if (_videoList.isNotEmpty) ...[
+                      // Current Generation
+                      if (currentRequest.when(
+                        data: (request) => request != null,
+                        loading: () => false,
+                        error: (_, __) => false,
+                      )) ...[
                         const Text(
-                          'Your Generated Videos',
+                          'Current Generation',
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: 18,
@@ -441,44 +225,110 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> with SingleTicker
                           ),
                         ),
                         const SizedBox(height: 16),
-                        ..._videoList
-                            .take(_videosPerPage)
-                            .map(_buildVideoCard)
-                            .toList(),
-                        if (_hasMoreVideos)
-                          Center(
-                            child: TextButton(
-                              onPressed:
-                                  _isLoadingVideos ? null : () => _loadVideos(),
-                              child: _isLoadingVideos
-                                  ? const SizedBox(
-                                      width: 20,
-                                      height: 20,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                      ),
-                                    )
-                                  : const Text('Load More'),
-                            ),
+                        currentRequest.when(
+                          data: (request) => request != null
+                              ? GenerationRequestCard(
+                                  request: request,
+                                  onCancel: () => _requestService.cancelRequest(
+                                    request.id,
+                                    context,
+                                  ),
+                                  onRetry: () => _requestService.retryRequest(
+                                    request.id,
+                                    context,
+                                  ),
+                                  isExpanded: true,
+                                )
+                              : const SizedBox.shrink(),
+                          loading: () => const Center(
+                            child: CircularProgressIndicator(),
                           ),
+                          error: (error, _) => Text(
+                            'Error: $error',
+                            style: const TextStyle(color: Colors.red),
+                          ),
+                        ),
                       ],
+                      const SizedBox(height: 24),
+                      // Previous Generations
+                      userRequests.when(
+                        data: (requests) {
+                          final videoRequests = requests
+                              .where((r) => r.type == GenerationType.video)
+                              .where((r) => r.id != _currentRequestId)
+                              .toList();
+
+                          if (videoRequests.isEmpty) {
+                            return const SizedBox.shrink();
+                          }
+
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Previous Generations',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              ...videoRequests.map((request) =>
+                                GenerationRequestCard(
+                                  request: request,
+                                  onRetry: request.canRetry
+                                      ? () => _requestService.retryRequest(
+                                          request.id,
+                                          context,
+                                        )
+                                      : null,
+                                  onCancel: request.canCancel
+                                      ? () => _requestService.cancelRequest(
+                                          request.id,
+                                          context,
+                                        )
+                                      : null,
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                        loading: () => const Center(
+                          child: CircularProgressIndicator(),
+                        ),
+                        error: (error, _) => Text(
+                          'Error: $error',
+                          style: const TextStyle(color: Colors.red),
+                        ),
+                      ),
                     ],
                   ),
                 ),
               ],
             ),
             // Loading Overlay
-            if (_isGenerating)
-              GestureDetector(
-                onTap: _cancelGeneration,
-                child: LoadingOverlay(
-                  message: 'Generating Video',
-                  subMessage: 'This may take a few minutes. Please wait or tap to cancel.',
-                  isLoading: true,
-                  child: const SizedBox.shrink(),
-                  useGalaxyAnimation: true,
-                ),
-              ),
+            currentRequest.when(
+              data: (request) => request?.isInProgress ?? false
+                  ? GestureDetector(
+                      onTap: () => _requestService.cancelRequest(
+                        request!.id,
+                        context,
+                      ),
+                      child: LoadingOverlay(
+                        message: 'Generating Video',
+                        subMessage: request?.progress != null
+                            ? 'Progress: ${request!.progress}%'
+                            : 'This may take a few minutes. Please wait or tap to cancel.',
+                        isLoading: true,
+                        child: const SizedBox.shrink(),
+                        useGalaxyAnimation: true,
+                      ),
+                    )
+                  : const SizedBox.shrink(),
+              loading: () => const SizedBox.shrink(),
+              error: (_, __) => const SizedBox.shrink(),
+            ),
           ],
         ),
       ),
