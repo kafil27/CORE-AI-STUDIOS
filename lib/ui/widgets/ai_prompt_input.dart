@@ -3,15 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../services/token_service.dart';
 import '../../services/notification_service.dart';
 import '../../providers/token_provider.dart';
-
-enum AIGenerationType {
-  image,
-  video,
-  audio,
-}
+import '../../models/generation_type.dart';
 
 class AIPromptInput extends ConsumerStatefulWidget {
-  final AIGenerationType type;
+  final GenerationType type;
   final Function(String) onSubmit;
   final bool isLoading;
   final String? initialValue;
@@ -53,15 +48,15 @@ class _AIPromptInputState extends ConsumerState<AIPromptInput> {
 
   void _initializeConfig() {
     switch (widget.type) {
-      case AIGenerationType.image:
+      case GenerationType.image:
         _tokenCost = 50;
         _maxLength = 1000;
         break;
-      case AIGenerationType.video:
+      case GenerationType.video:
         _tokenCost = 100;
         _maxLength = 500;
         break;
-      case AIGenerationType.audio:
+      case GenerationType.audio:
         _tokenCost = 30;
         _maxLength = 2000;
         break;

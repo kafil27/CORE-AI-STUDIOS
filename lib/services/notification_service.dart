@@ -5,7 +5,6 @@ import 'package:vibration/vibration.dart';
 import 'package:audioplayers/audioplayers.dart';
 import '../ui/widgets/custom_error_popup.dart';
 import '../ui/widgets/insufficient_balance_popup.dart';
-import 'package:permission_handler/permission_handler.dart';
 
 enum NotificationType {
   success,

@@ -47,7 +47,7 @@ class GenerationRequestService {
       case types.GenerationType.audio:
         return 30;
     }
-    return 20; // Default cost
+// Default cost
   }
 
   Future<String?> submitRequest({

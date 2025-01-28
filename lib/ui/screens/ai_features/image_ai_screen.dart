@@ -136,7 +136,7 @@ class _ImageAIScreenState extends ConsumerState<ImageAIScreen> {
                     children: [
                       // Prompt Input
                       AIPromptInput(
-                        type: AIGenerationType.image,
+                        type: GenerationType.image,
                         onSubmit: _generateImage,
                         isLoading: currentRequest.when(
                           data: (request) => request?.isInProgress ?? false,

@@ -19,7 +19,8 @@ class GenerationProgressBar extends StatefulWidget {
   State<GenerationProgressBar> createState() => _GenerationProgressBarState();
 }
 
-class _GenerationProgressBarState extends State<GenerationProgressBar> with SingleTickerProviderStateMixin {
+class _GenerationProgressBarState extends State<GenerationProgressBar>
+    with SingleTickerProviderStateMixin {
   late AnimationController _shimmerController;
   late Animation<double> _shimmerAnimation;
 
