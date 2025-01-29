@@ -154,7 +154,8 @@ class _ImageAIScreenState extends ConsumerState<ImageAIScreen> {
                         title: 'Image Generation Tips',
                         icon: Icons.lightbulb_outline,
                         accentColor: Colors.amber,
-                        isCollapsible: true,
+                        
+                      
                         tips: [
                           'Be specific about what you want in the image.',
                           'Include details about style, lighting, and composition.',

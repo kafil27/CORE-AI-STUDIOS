@@ -5,97 +5,135 @@ class TipsSection extends StatelessWidget {
   final String title;
   final IconData icon;
   final Color? accentColor;
-  final bool isCollapsible;
+  final VoidCallback? onClose;
 
   const TipsSection({
-    Key? key,
+    super.key,
     required this.tips,
     this.title = 'Tips',
     this.icon = Icons.lightbulb_outline,
     this.accentColor,
-    this.isCollapsible = true,
-  }) : super(key: key);
+    this.onClose,
+  });
 
   @override
   Widget build(BuildContext context) {
     final color = accentColor ?? Theme.of(context).primaryColor;
     
-    return Container(
-      margin: EdgeInsets.symmetric(vertical: 8),
-      decoration: BoxDecoration(
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        height: MediaQuery.of(context).size.height * 0.8,
         color: Colors.grey[900],
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(
-          color: color.withOpacity(0.3),
-          width: 1,
-        ),
-      ),
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: isCollapsible
-          ? ExpansionTile(
-              leading: Icon(icon, color: color),
-              title: Text(
-                title,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              children: _buildTipsList(color),
-              childrenPadding: EdgeInsets.fromLTRB(16, 0, 16, 16),
-            )
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Header with drag handle
+            Container(
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+              child: Column(
+                children: [
+                  // Drag handle
+                  Container(
+                    width: 40,
+                    height: 4,
+                    margin: const EdgeInsets.symmetric(vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[700],
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  // Title row
+                  Row(
                     children: [
-                      Icon(icon, color: color),
-                      SizedBox(width: 12),
+                      Icon(icon, color: color, size: 24),
+                      const SizedBox(width: 12),
                       Text(
                         title,
-                        style: TextStyle(
+                        style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w600,
                         ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        color: Colors.grey[400],
+                        onPressed: () {
+                          if (onClose != null) {
+                            onClose!();
+                          } else {
+                            Navigator.of(context).pop();
+                          }
+                        },
                       ),
                     ],
                   ),
-                ),
-                ..._buildTipsList(color),
-              ],
+                ],
+              ),
             ),
+            // Tips list
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                itemCount: tips.length,
+                itemBuilder: (context, index) {
+                  return TipItem(
+                    tip: tips[index],
+                    color: color,
+                    isLast: index == tips.length - 1,
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
+}
 
-  List<Widget> _buildTipsList(Color color) {
-    return tips.map((tip) => Padding(
-      padding: EdgeInsets.only(bottom: 8),
+class TipItem extends StatelessWidget {
+  final String tip;
+  final Color color;
+  final bool isLast;
+
+  const TipItem({
+    super.key,
+    required this.tip,
+    required this.color,
+    this.isLast = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: EdgeInsets.only(bottom: isLast ? 0 : 16),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            Icons.check_circle_outline,
-            color: color.withOpacity(0.7),
-            size: 16,
+          Container(
+            margin: const EdgeInsets.only(top: 4),
+            child: Icon(
+              Icons.check_circle_outline,
+              color: color.withAlpha(179),
+              size: 16,
+            ),
           ),
-          SizedBox(width: 8),
+          const SizedBox(width: 12),
           Expanded(
             child: Text(
               tip,
               style: TextStyle(
                 color: Colors.grey[300],
-                fontSize: 14,
+                fontSize: 16,
+                height: 1.5,
               ),
             ),
           ),
         ],
       ),
-    )).toList();
+    );
   }
 } 

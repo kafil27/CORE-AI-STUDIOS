@@ -14,6 +14,7 @@ class AIPromptInput extends ConsumerStatefulWidget {
   final IconData? submitIcon;
   final String? submitLabel;
   final Color? accentColor;
+  final FocusNode? focusNode;
 
   const AIPromptInput({
     Key? key,
@@ -25,6 +26,7 @@ class AIPromptInput extends ConsumerStatefulWidget {
     this.submitIcon,
     this.submitLabel,
     this.accentColor,
+    this.focusNode,
   }) : super(key: key);
 
   @override
@@ -65,14 +67,8 @@ class _AIPromptInputState extends ConsumerState<AIPromptInput> {
 
   void _validatePrompt() {
     final text = _promptController.text;
-    
-    // Check for emojis
     setState(() {
       _hasEmoji = RegExp(r'[^\x00-\x7F]+').hasMatch(text);
-    });
-
-    // Check for special characters (except basic punctuation)
-    setState(() {
       _hasSpecialChars = RegExp(r'[^\w\s.,!?-]').hasMatch(text);
     });
   }
@@ -123,12 +119,17 @@ class _AIPromptInputState extends ConsumerState<AIPromptInput> {
   @override
   Widget build(BuildContext context) {
     final tokenBalance = ref.watch(tokenBalanceProvider).value ?? 0;
+    final hasEnoughTokens = tokenBalance >= _tokenCost;
 
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.grey[900],
         borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: Colors.grey[800]!,
+          width: 1,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -138,6 +139,7 @@ class _AIPromptInputState extends ConsumerState<AIPromptInput> {
             controller: _promptController,
             maxLines: null,
             enabled: !widget.isLoading,
+            focusNode: widget.focusNode,
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
               hintText: widget.hintText ?? 'Enter your prompt...',
@@ -153,42 +155,69 @@ class _AIPromptInputState extends ConsumerState<AIPromptInput> {
           ),
           const SizedBox(height: 12),
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'Cost: $_tokenCost tokens',
-                style: TextStyle(
-                  color: tokenBalance >= _tokenCost 
-                    ? Colors.green 
-                    : Colors.red,
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: hasEnoughTokens ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: hasEnoughTokens ? Colors.green.withOpacity(0.3) : Colors.red.withOpacity(0.3),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _tokenCost.toString(),
+                      style: TextStyle(
+                        color: hasEnoughTokens ? Colors.green : Colors.red,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Icon(
+                      Icons.token,
+                      size: 16,
+                      color: hasEnoughTokens ? Colors.green : Colors.red,
+                    ),
+                  ],
                 ),
               ),
-              ElevatedButton.icon(
-                onPressed: widget.isLoading || !_isValid 
-                  ? null 
-                  : _handleSubmit,
-                icon: widget.isLoading
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              const Spacer(),
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                child: ElevatedButton.icon(
+                  onPressed: widget.isLoading || !_isValid || !hasEnoughTokens
+                    ? null 
+                    : _handleSubmit,
+                  icon: widget.isLoading
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                        ),
+                      )
+                    : Icon(
+                        widget.submitIcon ?? Icons.send_rounded,
+                        color: Colors.white,
                       ),
-                    )
-                  : Icon(
-                      widget.submitIcon ?? Icons.send_rounded,
-                      color: Colors.white,
+                  label: Text(
+                    widget.submitLabel ?? 'Generate',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: widget.accentColor ?? Colors.blue,
+                    disabledBackgroundColor: Colors.grey[700],
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
                     ),
-                label: Text(
-                  widget.submitLabel ?? 'Generate',
-                  style: const TextStyle(color: Colors.white),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: widget.accentColor ?? Colors.blue,
-                  disabledBackgroundColor: Colors.grey,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
                   ),
                 ),
               ),

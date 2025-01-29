@@ -233,7 +233,7 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> with SingleTicker
                         title: 'Video Generation Tips',
                         icon: Icons.lightbulb_outline,
                         accentColor: Colors.amber,
-                        isCollapsible: true,
+                        
                         tips: [
                           'Be specific about the scene, actions, and mood you want.',
                           'Include details about lighting, camera angles, and movement.',
