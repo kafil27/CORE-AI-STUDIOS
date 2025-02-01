@@ -1,94 +1,136 @@
 import 'package:flutter/material.dart';
 
 class TipsSection extends StatelessWidget {
-  final List<String> tips;
   final String title;
   final IconData icon;
-  final Color? accentColor;
-  final VoidCallback? onClose;
+  final Color accentColor;
+  final List<String> tips;
+  final Gradient? closeIconGradient;
 
   const TipsSection({
     super.key,
+    required this.title,
+    required this.icon,
+    required this.accentColor,
     required this.tips,
-    this.title = 'Tips',
-    this.icon = Icons.lightbulb_outline,
-    this.accentColor,
-    this.onClose,
+    this.closeIconGradient,
   });
 
   @override
   Widget build(BuildContext context) {
-    final color = accentColor ?? Theme.of(context).primaryColor;
-    
-    return Material(
-      color: Colors.transparent,
-      child: Container(
-        height: MediaQuery.of(context).size.height * 0.8,
-        color: Colors.grey[900],
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Header with drag handle
-            Container(
-              padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
-              child: Column(
-                children: [
-                  // Drag handle
-                  Container(
-                    width: 40,
-                    height: 4,
-                    margin: const EdgeInsets.symmetric(vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[700],
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  // Title row
-                  Row(
-                    children: [
-                      Icon(icon, color: color, size: 24),
-                      const SizedBox(width: 12),
-                      Text(
-                        title,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        borderRadius: const BorderRadius.vertical(
+          top: Radius.circular(20),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Header with title and close button
+          Container(
+            padding: const EdgeInsets.fromLTRB(24, 16, 16, 16),
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(
+                  color: Colors.grey.withOpacity(0.2),
+                ),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  icon,
+                  color: accentColor,
+                  size: 24,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          color: accentColor,
                           fontWeight: FontWeight.w600,
                         ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                ShaderMask(
+                  shaderCallback: (bounds) => LinearGradient(
+                    colors: [
+                      Colors.red.shade300,
+                      Colors.red.shade600,
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ).createShader(bounds),
+                  child: IconButton(
+                    icon: const Icon(
+                      Icons.close,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                    onPressed: () => Navigator.of(context).pop(),
+                    tooltip: 'Close',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(
+                      minWidth: 32,
+                      minHeight: 32,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Tips list
+          Flexible(
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 16,
+              ),
+              shrinkWrap: true,
+              itemCount: tips.length,
+              itemBuilder: (context, index) {
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 24,
+                        height: 24,
+                        decoration: BoxDecoration(
+                          color: accentColor.withOpacity(0.1),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Center(
+                          child: Text(
+                            '${index + 1}',
+                            style: TextStyle(
+                              color: accentColor,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
                       ),
-                      const Spacer(),
-                      IconButton(
-                        icon: const Icon(Icons.close),
-                        color: Colors.grey[400],
-                        onPressed: () {
-                          if (onClose != null) {
-                            onClose!();
-                          } else {
-                            Navigator.of(context).pop();
-                          }
-                        },
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          tips[index],
+                          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                height: 1.5,
+                              ),
+                        ),
                       ),
                     ],
                   ),
-                ],
-              ),
+                );
+              },
             ),
-            // Tips list
-            Expanded(
-              child: ListView.builder(
-                padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                itemCount: tips.length,
-                itemBuilder: (context, index) {
-                  return TipItem(
-                    tip: tips[index],
-                    color: color,
-                    isLast: index == tips.length - 1,
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

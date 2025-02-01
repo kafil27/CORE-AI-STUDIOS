@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:loading_animation_widget/loading_animation_widget.dart';
 import '../../../services/video_generation_service.dart';
 import '../../../services/notification_service.dart';
 import '../../widgets/ai_prompt_input.dart';
@@ -10,7 +11,6 @@ import '../../widgets/generation_request_card.dart';
 import '../../../services/predis_video_service.dart';
 import '../../widgets/generation_progress_bar.dart';
 import '../../widgets/ai_app_bar.dart';
-import 'package:flutter_animated_loadingkit/flutter_animated_loadingkit.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../services/token_balance_service.dart';
 import '../../widgets/loading_overlay.dart';
@@ -23,20 +23,24 @@ final videoServiceProvider = Provider((ref) => VideoGenerationService());
 final generationRequestServiceProvider = Provider((ref) => GenerationRequestService());
 
 final recentVideosProvider = StreamProvider.autoDispose<List<GenerationRequest>>((ref) async* {
+  debugPrint('[VideoAI] Starting recent videos stream');
   final predisService = PredisVideoService();
   final navigator = ref.read(navigatorKeyProvider);
   
   while (true) {
     try {
       if (navigator.currentContext != null) {
+        debugPrint('[VideoAI] Fetching recent videos...');
         final videos = await predisService.getRecentVideos(
           context: navigator.currentContext!,
           limit: 5,
         );
+        debugPrint('[VideoAI] Fetched ${videos.length} videos successfully');
         yield videos;
       }
-    } catch (e) {
-      debugPrint('Error fetching videos: $e');
+    } catch (e, stack) {
+      debugPrint('[VideoAI] Error fetching videos: $e\n$stack');
+      rethrow; // Propagate error for proper UI handling
     }
     await Future.delayed(const Duration(seconds: 10));
   }
@@ -79,6 +83,8 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
   final _predisService = PredisVideoService();
   String? _currentRequestId;
   final _focusNode = FocusNode();
+  bool _isPromptValid = false;
+  String _prompt = '';
 
   @override
   void dispose() {
@@ -136,6 +142,13 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
                             submitLabel: 'Generate Video',
                             accentColor: Colors.red.shade400,
                             focusNode: _focusNode,
+                            onChanged: (value) {
+                              setState(() {
+                                _prompt = value;
+                                _isPromptValid = value.trim().length >= 10;
+                              });
+                            },
+                            isEnabled: _isPromptValid && _currentRequestId == null,
                           ),
                         ),
                       ),
@@ -177,126 +190,82 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
                   ),
                 ),
               ),
-              recentVideos.when(
-                data: (videos) {
-                  if (videos.isEmpty) {
-                    return SliverFillRemaining(
-                      hasScrollBody: false,
-                      child: Center(
-                        child: AnimatedOpacity(
-                          duration: const Duration(milliseconds: 300),
-                          opacity: 0.8,
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.movie_creation_outlined,
-                                size: 48,
-                                color: Colors.grey[700],
-                              ),
-                              const SizedBox(height: 16),
-                              Text(
-                                'No videos generated yet',
-                                style: TextStyle(
+              SliverPadding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                sliver: recentVideos.when(
+                  data: (videos) => videos.isEmpty
+                      ? SliverFillRemaining(
+                          hasScrollBody: false,
+                          child: Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.movie_creation_outlined,
+                                  size: 48,
                                   color: Colors.grey[600],
-                                  fontSize: 16,
                                 ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                'Your generated videos will appear here',
-                                style: TextStyle(
-                                  color: Colors.grey[700],
-                                  fontSize: 14,
+                                const SizedBox(height: 16),
+                                Text(
+                                  'No videos generated yet',
+                                  style: TextStyle(
+                                    color: Colors.grey[600],
+                                    fontSize: 16,
+                                  ),
                                 ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    );
-                  }
-
-                  return SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        final request = videos[index];
-                        return AnimatedSlide(
-                          duration: Duration(milliseconds: 300 + (index * 100)),
-                          offset: Offset.zero,
-                          child: AnimatedOpacity(
-                            duration: Duration(milliseconds: 300 + (index * 100)),
-                            opacity: 1.0,
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 8,
-                              ),
-                              child: GenerationRequestCard(
-                                request: request,
-                                showProgress: true,
-                                showControls: true,
-                                isExpanded: true,
-                                onRetry: () => _predisService.retryRequest(
-                                  request.id,
-                                  context,
-                                ),
-                                onCancel: () => _predisService.cancelRequest(
-                                  request.id,
-                                  context,
-                                ),
-                              ),
+                              ],
                             ),
                           ),
-                        );
-                      },
-                      childCount: videos.length,
-                    ),
-                  );
-                },
-                loading: () => SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: Center(
-                    child: SizedBox(
-                      width: 32,
-                      height: 32,
-                      child: AnimatedLoadingSideWaySurge(
-                        expandWidth: 24,
-                        borderWidth: 2,
-                        borderColor: Colors.red.shade400,
-                        speed: const Duration(milliseconds: 800),
+                        )
+                      : SliverList(
+                          delegate: SliverChildBuilderDelegate(
+                            (context, index) => GenerationRequestCard(
+                              request: videos[index],
+                              onRetry: () => _predisService.retryRequest(
+                                videos[index].id,
+                                context,
+                              ),
+                              onCancel: () => _predisService.cancelRequest(
+                                videos[index].id,
+                                context,
+                              ),
+                            ),
+                            childCount: videos.length,
+                          ),
+                        ),
+                  loading: () => SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: Center(
+                      child: LoadingAnimationWidget.dotsTriangle(
+                        color: Colors.red.shade400,
+                        size: 50,
                       ),
                     ),
                   ),
-                ),
-                error: (error, stack) => SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: Center(
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 300),
-                      opacity: 0.8,
+                  error: (error, stack) => SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: Center(
                       child: Column(
-                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Icon(
                             Icons.error_outline,
+                            color: Colors.red.shade400,
                             size: 48,
-                            color: Colors.red[400],
                           ),
                           const SizedBox(height: 16),
                           Text(
-                            'Failed to load videos',
+                            'Failed to load recent videos',
                             style: TextStyle(
-                              color: Colors.red[400],
+                              color: Colors.grey[600],
                               fontSize: 16,
                             ),
                           ),
                           if (error != null)
                             Padding(
-                              padding: const EdgeInsets.only(
-                                top: 8,
-                                left: 32,
-                                right: 32,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 32,
+                                vertical: 8,
                               ),
                               child: Text(
                                 error.toString(),
@@ -307,6 +276,15 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
                                 textAlign: TextAlign.center,
                               ),
                             ),
+                          const SizedBox(height: 16),
+                          TextButton.icon(
+                            onPressed: () => ref.refresh(recentVideosProvider),
+                            icon: const Icon(Icons.refresh),
+                            label: const Text('Retry'),
+                            style: TextButton.styleFrom(
+                              foregroundColor: Colors.red.shade400,
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -318,192 +296,6 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
         ),
       ),
     );
-  }
-
-  void _showTipsDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Container(
-          width: MediaQuery.of(context).size.width * 0.9,
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(context).size.height * 0.8,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 16,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.red.shade400.withOpacity(0.1),
-                  borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(16),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.lightbulb_outline,
-                      color: Colors.amber[400],
-                      size: 24,
-                    ),
-                    const SizedBox(width: 12),
-                    const Expanded(
-                      child: Text(
-                        'Video Generation Tips',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(context),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                      color: Colors.grey[400],
-                    ),
-                  ],
-                ),
-              ),
-              Flexible(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildTipSection(
-                        'Scene Description',
-                        [
-                          'Be specific about scene details and actions',
-                          'Describe the setting and environment',
-                          'Specify time of day and weather if relevant',
-                          'Include character descriptions and emotions',
-                        ],
-                        Icons.movie_creation_outlined,
-                      ),
-                      const SizedBox(height: 24),
-                      _buildTipSection(
-                        'Technical Aspects',
-                        [
-                          'Specify camera angles and movements',
-                          'Describe lighting conditions',
-                          'Mention any special effects needed',
-                          'Include transition preferences',
-                        ],
-                        Icons.camera_alt_outlined,
-                      ),
-                      const SizedBox(height: 24),
-                      _buildTipSection(
-                        'Style & Mood',
-                        [
-                          'Define the overall mood or atmosphere',
-                          'Specify artistic style (realistic, animated, etc.)',
-                          'Include color palette preferences',
-                          'Mention any reference styles or inspirations',
-                        ],
-                        Icons.palette_outlined,
-                      ),
-                      const SizedBox(height: 24),
-                      _buildTipSection(
-                        'Best Practices',
-                        [
-                          'Keep prompts clear and focused',
-                          'Avoid contradictory instructions',
-                          'Use simple language and avoid jargon',
-                          'Break complex scenes into separate generations',
-                        ],
-                        Icons.tips_and_updates_outlined,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTipSection(String title, List<String> tips, IconData icon) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Icon(
-              icon,
-              size: 20,
-              color: Colors.red[400],
-            ),
-            const SizedBox(width: 12),
-            Text(
-              title,
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: Colors.white,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        ...tips.map((tip) => Padding(
-          padding: const EdgeInsets.only(left: 32, bottom: 12),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(
-                Icons.check_circle_outline,
-                size: 16,
-                color: Colors.green[400],
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  tip,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.grey[300],
-                    height: 1.4,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        )).toList(),
-      ],
-    );
-  }
-
-  Future<void> _generateVideo(String prompt) async {
-    // Unfocus keyboard
-    _focusNode.unfocus();
-    
-    try {
-      final requestId = await _predisService.generateVideo(
-        context: context,
-        prompt: prompt,
-      );
-
-      if (requestId != null) {
-        setState(() => _currentRequestId = requestId);
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _currentRequestId = null);
-      }
-      rethrow;
-    }
   }
 
   Widget _buildProgressBar() {
@@ -529,13 +321,63 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
             
             if (request == null) return const SizedBox.shrink();
             
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: GenerationProgressBar(
-                progress: (request.progress ?? 0) / 100,
-                status: request.statusText ?? 'Processing...',
-                showLabel: true,
-                height: 4,
+            return Container(
+              margin: const EdgeInsets.only(top: 16),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    Colors.red.shade400.withOpacity(0.1),
+                    Colors.red.shade600.withOpacity(0.2),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        _getStatusIcon(request.status),
+                        color: _getStatusColor(request.status),
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        request.statusText ?? 'Processing...',
+                        style: TextStyle(
+                          color: _getStatusColor(request.status),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const Spacer(),
+                      if (request.status == GenerationStatus.queued ||
+                          request.status == GenerationStatus.pending)
+                        Text(
+                          'In Queue',
+                          style: TextStyle(
+                            color: Colors.red.shade400,
+                            fontSize: 12,
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: LinearProgressIndicator(
+                      value: (request.progress ?? 0) / 100,
+                      backgroundColor: Colors.grey.withOpacity(0.2),
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        _getStatusColor(request.status),
+                      ),
+                      minHeight: 4,
+                    ),
+                  ),
+                ],
               ),
             );
           },
@@ -544,5 +386,95 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
         );
       },
     );
+  }
+
+  Color _getStatusColor(GenerationStatus? status) {
+    switch (status) {
+      case GenerationStatus.completed:
+        return Colors.green;
+      case GenerationStatus.failed:
+        return Colors.red.shade400;
+      case GenerationStatus.cancelled:
+        return Colors.orange;
+      default:
+        return Colors.red.shade400;
+    }
+  }
+
+  IconData _getStatusIcon(GenerationStatus? status) {
+    switch (status) {
+      case GenerationStatus.completed:
+        return Icons.check_circle_outline;
+      case GenerationStatus.failed:
+        return Icons.error_outline;
+      case GenerationStatus.cancelled:
+        return Icons.cancel_outlined;
+      case GenerationStatus.queued:
+        return Icons.queue;
+      case GenerationStatus.processing:
+        return Icons.movie_creation_outlined;
+      default:
+        return Icons.pending_outlined;
+    }
+  }
+
+  void _showTipsDialog() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.8,
+        ),
+        child: TipsSection(
+          title: 'Video Generation Tips',
+          icon: Icons.movie_creation_outlined,
+          accentColor: Colors.red.shade400,
+          closeIconGradient: LinearGradient(
+            colors: [
+              Colors.red.shade300,
+              Colors.red.shade600,
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          tips: const [
+            'Predis AI excels at creating short-form video content like ads and social media posts',
+            'Keep your prompts clear and specific about the video style, mood, and target audience',
+            'Optimal video length is 15-60 seconds for best results',
+            'Include key information like brand message, target audience, and desired call-to-action',
+            'Specify if you want text overlays, music, or specific visual elements',
+            'For best results, mention the platform (Instagram, TikTok, etc.) in your prompt',
+            'Use industry-specific terms to get more relevant content',
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _generateVideo(String prompt) async {
+    debugPrint('[VideoAI] Starting video generation with prompt: $prompt');
+    _focusNode.unfocus();
+    
+    try {
+      final requestId = await _predisService.generateVideo(
+        context: context,
+        prompt: prompt,
+      );
+
+      if (requestId != null) {
+        debugPrint('[VideoAI] Generation started with requestId: $requestId');
+        setState(() => _currentRequestId = requestId);
+      } else {
+        debugPrint('[VideoAI] Failed to start generation - no requestId returned');
+      }
+    } catch (e, stack) {
+      debugPrint('[VideoAI] Generation error: $e\n$stack');
+      if (mounted) {
+        setState(() => _currentRequestId = null);
+      }
+      rethrow;
+    }
   }
 } 

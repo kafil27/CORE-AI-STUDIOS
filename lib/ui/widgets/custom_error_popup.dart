@@ -12,7 +12,7 @@ enum ErrorType {
   otherError
 }
 
-class CustomErrorPopup extends StatelessWidget {
+class CustomErrorPopup extends StatefulWidget {
   final ErrorType errorType;
   final String message;
   final String? technicalDetails;
@@ -28,8 +28,16 @@ class CustomErrorPopup extends StatelessWidget {
     this.supportEmail,
   }) : super(key: key);
 
+  @override
+  State<CustomErrorPopup> createState() => _CustomErrorPopupState();
+}
+
+class _CustomErrorPopupState extends State<CustomErrorPopup> {
+  String? _logFilePath;
+  bool _isDownloading = false;
+
   String get _errorImage {
-    switch (errorType) {
+    switch (widget.errorType) {
       case ErrorType.apiNotFound:
         return 'assets/error_404.png';
       case ErrorType.serviceError:
@@ -42,7 +50,7 @@ class CustomErrorPopup extends StatelessWidget {
   }
 
   String get _errorTitle {
-    switch (errorType) {
+    switch (widget.errorType) {
       case ErrorType.apiNotFound:
         return 'Service Not Found';
       case ErrorType.serviceError:
@@ -58,34 +66,57 @@ class CustomErrorPopup extends StatelessWidget {
     }
   }
 
-  Future<String> _saveErrorLog() async {
+  Future<void> _saveAndOpenErrorLog() async {
+    if (_isDownloading) return;
+    
+    setState(() => _isDownloading = true);
+    
     try {
       final directory = await getApplicationDocumentsDirectory();
-      final timestamp = DateTime.now().toIso8601String();
+      final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
       final file = File('${directory.path}/error_log_$timestamp.txt');
       
       final logContent = '''
-Error Type: ${errorType.toString()}
+Error Type: ${widget.errorType.toString()}
 Time: $timestamp
-Message: $message
-${technicalDetails != null ? '\nTechnical Details: $technicalDetails' : ''}
+Message: ${widget.message}
+${widget.technicalDetails != null ? '\nTechnical Details:\n${widget.technicalDetails}' : ''}
 ''';
 
       await file.writeAsString(logContent);
-      return file.path;
+      setState(() {
+        _logFilePath = file.path;
+        _isDownloading = false;
+      });
     } catch (e) {
-      print('Error saving log: $e');
-      rethrow;
+      setState(() => _isDownloading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save log: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _openLogFile() async {
+    if (_logFilePath == null) return;
+    
+    final uri = Uri.file(_logFilePath!);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
     }
   }
 
   Future<void> _reportError() async {
-    if (supportEmail == null) return;
+    if (widget.supportEmail == null) return;
     
     final Uri emailUri = Uri(
       scheme: 'mailto',
-      path: supportEmail,
-      query: 'subject=Error Report: ${_errorTitle}&body=Error Details:\n$message',
+      path: widget.supportEmail,
+      query: 'subject=Error Report: ${_errorTitle}&body=Error Details:\n${widget.message}',
     );
 
     if (await canLaunchUrl(emailUri)) {
@@ -98,12 +129,16 @@ ${technicalDetails != null ? '\nTechnical Details: $technicalDetails' : ''}
     return Dialog(
       backgroundColor: Colors.transparent,
       child: Container(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.9,
+          maxHeight: MediaQuery.of(context).size.height * 0.9,
+        ),
         padding: EdgeInsets.all(24),
         decoration: BoxDecoration(
-          color: Colors.grey[900],
+          color: Theme.of(context).colorScheme.surface,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-            color: Colors.grey[800]!,
+            color: Theme.of(context).colorScheme.outline.withOpacity(0.1),
             width: 1,
           ),
           boxShadow: [
@@ -117,97 +152,84 @@ ${technicalDetails != null ? '\nTechnical Details: $technicalDetails' : ''}
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // Close button
+            Align(
+              alignment: Alignment.topRight,
+              child: IconButton(
+                icon: Icon(Icons.close, color: Theme.of(context).colorScheme.onSurface),
+                onPressed: () => Navigator.of(context).pop(),
+                splashRadius: 20,
+              ),
+            ),
             Image.asset(
               _errorImage,
-              height: 120,
-              width: 120,
-            ),
-            SizedBox(height: 24),
-            Text(
-              _errorTitle,
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-              ),
+              height: 100,
+              width: 100,
             ),
             SizedBox(height: 16),
             Text(
-              message,
+              _errorTitle,
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
+            ),
+            SizedBox(height: 12),
+            Text(
+              widget.message,
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.grey[300],
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ),
             SizedBox(height: 24),
-            if (onRetry != null)
-              ElevatedButton.icon(
-                onPressed: onRetry,
+            if (widget.onRetry != null)
+              FilledButton.icon(
+                onPressed: widget.onRetry,
                 icon: Icon(Icons.refresh),
                 label: Text('Try Again'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Theme.of(context).primaryColor.withOpacity(0.2),
-                  foregroundColor: Theme.of(context).primaryColor,
+                style: FilledButton.styleFrom(
                   padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
                 ),
               ),
             SizedBox(height: 16),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                if (supportEmail != null)
+                if (widget.supportEmail != null)
                   TextButton.icon(
                     onPressed: _reportError,
                     icon: Icon(Icons.report_problem_outlined, size: 16),
                     label: Text('Report Issue'),
-                    style: TextButton.styleFrom(
-                      foregroundColor: Colors.grey[400],
-                    ),
                   ),
-                if (technicalDetails != null) ...[
+                if (widget.technicalDetails != null) ...[
                   SizedBox(width: 16),
-                  TextButton.icon(
-                    onPressed: _saveErrorLog,
-                    icon: Icon(Icons.download_outlined, size: 16),
-                    label: Text('Download Log'),
-                    style: TextButton.styleFrom(
-                      foregroundColor: Colors.grey[400],
+                  if (_logFilePath == null)
+                    TextButton.icon(
+                      onPressed: _isDownloading ? null : _saveAndOpenErrorLog,
+                      icon: _isDownloading 
+                        ? SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Theme.of(context).colorScheme.primary,
+                              ),
+                            ),
+                          )
+                        : Icon(Icons.download_outlined, size: 16),
+                      label: Text(_isDownloading ? 'Saving...' : 'Download Log'),
+                    )
+                  else
+                    TextButton.icon(
+                      onPressed: _openLogFile,
+                      icon: Icon(Icons.folder_open_outlined, size: 16),
+                      label: Text('Open Log'),
                     ),
-                  ),
                 ],
               ],
             ),
-            if (technicalDetails != null)
-              ExpansionTile(
-                title: Text(
-                  'Developer Details',
-                  style: TextStyle(
-                    color: Colors.grey[500],
-                    fontSize: 14,
-                  ),
-                ),
-                children: [
-                  Container(
-                    padding: EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.black12,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      technicalDetails!,
-                      style: TextStyle(
-                        color: Colors.grey[400],
-                        fontSize: 12,
-                        fontFamily: 'monospace',
-                      ),
-                    ),
-                  ),
-                ],
-              ),
           ],
         ),
       ),

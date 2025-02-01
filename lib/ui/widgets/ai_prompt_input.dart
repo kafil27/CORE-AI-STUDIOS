@@ -5,36 +5,40 @@ import '../../services/notification_service.dart';
 import '../../providers/token_provider.dart';
 import '../../models/generation_type.dart';
 
-class AIPromptInput extends ConsumerStatefulWidget {
+class AIPromptInput extends StatefulWidget {
   final GenerationType type;
   final Function(String) onSubmit;
+  final Function(String)? onChanged;
   final bool isLoading;
   final String? initialValue;
-  final String? hintText;
-  final IconData? submitIcon;
-  final String? submitLabel;
+  final String hintText;
+  final IconData submitIcon;
+  final String submitLabel;
   final Color? accentColor;
   final FocusNode? focusNode;
+  final bool isEnabled;
 
   const AIPromptInput({
     Key? key,
     required this.type,
     required this.onSubmit,
+    this.onChanged,
     this.isLoading = false,
     this.initialValue,
-    this.hintText,
-    this.submitIcon,
-    this.submitLabel,
+    required this.hintText,
+    required this.submitIcon,
+    required this.submitLabel,
     this.accentColor,
     this.focusNode,
+    this.isEnabled = true,
   }) : super(key: key);
 
   @override
-  ConsumerState<AIPromptInput> createState() => _AIPromptInputState();
+  State<AIPromptInput> createState() => _AIPromptInputState();
 }
 
-class _AIPromptInputState extends ConsumerState<AIPromptInput> {
-  late TextEditingController _promptController;
+class _AIPromptInputState extends State<AIPromptInput> {
+  late final TextEditingController _promptController;
   bool _hasEmoji = false;
   bool _hasSpecialChars = false;
   int _tokenCost = 0;
@@ -71,13 +75,20 @@ class _AIPromptInputState extends ConsumerState<AIPromptInput> {
       _hasEmoji = RegExp(r'[^\x00-\x7F]+').hasMatch(text);
       _hasSpecialChars = RegExp(r'[^\w\s.,!?-]').hasMatch(text);
     });
+    
+    // Call onChanged if provided
+    if (widget.onChanged != null) {
+      widget.onChanged!(_promptController.text);
+    }
   }
 
   bool get _isValid {
+    final text = _promptController.text.trim();
     return !_hasEmoji && 
            !_hasSpecialChars && 
-           _promptController.text.trim().isNotEmpty &&
-           _promptController.text.length <= _maxLength;
+           text.isNotEmpty &&
+           text.length >= 10 &&
+           text.length <= _maxLength;
   }
 
   void _handleSubmit() async {
@@ -108,6 +119,15 @@ class _AIPromptInputState extends ConsumerState<AIPromptInput> {
         );
         return;
       }
+
+      if (_promptController.text.trim().length < 10) {
+        NotificationService.showError(
+          title: 'Invalid Input',
+          message: 'Your prompt is too short. Minimum length is 10 characters.',
+          context: context,
+        );
+        return;
+      }
       
       return;
     }
@@ -118,9 +138,8 @@ class _AIPromptInputState extends ConsumerState<AIPromptInput> {
 
   @override
   Widget build(BuildContext context) {
-    final tokenBalance = ref.watch(tokenBalanceProvider).value ?? 0;
-    final hasEnoughTokens = tokenBalance >= _tokenCost;
-
+    final color = widget.accentColor ?? Theme.of(context).primaryColor;
+    
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -142,14 +161,14 @@ class _AIPromptInputState extends ConsumerState<AIPromptInput> {
             focusNode: widget.focusNode,
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
-              hintText: widget.hintText ?? 'Enter your prompt...',
-              hintStyle: TextStyle(color: Colors.grey[400]),
+              hintText: widget.hintText,
+              hintStyle: TextStyle(color: Colors.grey[600]),
               border: InputBorder.none,
               counterText: '${_promptController.text.length}/$_maxLength',
               counterStyle: TextStyle(
                 color: _promptController.text.length > _maxLength 
                   ? Colors.red 
-                  : Colors.grey[400],
+                  : Colors.grey[600],
               ),
             ),
           ),
@@ -159,10 +178,10 @@ class _AIPromptInputState extends ConsumerState<AIPromptInput> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
-                  color: hasEnoughTokens ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.1),
+                  color: _isValid ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(
-                    color: hasEnoughTokens ? Colors.green.withOpacity(0.3) : Colors.red.withOpacity(0.3),
+                    color: _isValid ? Colors.green.withOpacity(0.3) : Colors.red.withOpacity(0.3),
                   ),
                 ),
                 child: Row(
@@ -171,7 +190,7 @@ class _AIPromptInputState extends ConsumerState<AIPromptInput> {
                     Text(
                       _tokenCost.toString(),
                       style: TextStyle(
-                        color: hasEnoughTokens ? Colors.green : Colors.red,
+                        color: _isValid ? Colors.green : Colors.red,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -179,7 +198,7 @@ class _AIPromptInputState extends ConsumerState<AIPromptInput> {
                     Icon(
                       Icons.token,
                       size: 16,
-                      color: hasEnoughTokens ? Colors.green : Colors.red,
+                      color: _isValid ? Colors.green : Colors.red,
                     ),
                   ],
                 ),
@@ -188,26 +207,36 @@ class _AIPromptInputState extends ConsumerState<AIPromptInput> {
               AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 child: ElevatedButton.icon(
-                  onPressed: widget.isLoading || !_isValid || !hasEnoughTokens
-                    ? null 
-                    : _handleSubmit,
+                  onPressed: widget.isLoading || !_isValid ? null : _handleSubmit,
                   icon: widget.isLoading
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    ? ShaderMask(
+                        shaderCallback: (bounds) => LinearGradient(
+                          colors: [
+                            Colors.grey.shade600,
+                            Colors.grey.shade800,
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          tileMode: TileMode.mirror,
+                        ).createShader(bounds),
+                        child: Text(
+                          'Generating...',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       )
                     : Icon(
-                        widget.submitIcon ?? Icons.send_rounded,
+                        widget.submitIcon,
                         color: Colors.white,
                       ),
-                  label: Text(
-                    widget.submitLabel ?? 'Generate',
-                    style: const TextStyle(color: Colors.white),
-                  ),
+                  label: widget.isLoading
+                    ? const SizedBox.shrink()
+                    : Text(
+                        widget.submitLabel,
+                        style: const TextStyle(color: Colors.white),
+                      ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: widget.accentColor ?? Colors.blue,
                     disabledBackgroundColor: Colors.grey[700],

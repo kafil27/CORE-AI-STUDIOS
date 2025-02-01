@@ -5,6 +5,7 @@ import 'package:vibration/vibration.dart';
 import 'package:audioplayers/audioplayers.dart';
 import '../ui/widgets/custom_error_popup.dart';
 import '../ui/widgets/insufficient_balance_popup.dart';
+import 'package:flutter/services.dart';
 
 enum NotificationType {
   success,
@@ -82,14 +83,36 @@ class NotificationService {
     }
   }
 
+  static void _showNotification({
+    required BuildContext context,
+    required String title,
+    required String message,
+    required ErrorType type,
+    VoidCallback? onRetry,
+    bool playSound = false,
+  }) {
+    if (playSound) {
+      SystemSound.play(SystemSoundType.alert);
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) => CustomErrorPopup(
+        errorType: type,
+        message: message,
+        onRetry: onRetry,
+      ),
+    );
+  }
+
   static void showError({
     required BuildContext context,
     required String title,
     required String message,
     ErrorType errorType = ErrorType.otherError,
-    VoidCallback? onRetry,
     String? technicalDetails,
-    bool showPopup = true,
+    VoidCallback? onRetry,
+    bool showPopup = false,
   }) async {
     await _vibrate(NotificationType.error);
 
@@ -113,6 +136,13 @@ class NotificationService {
         width: MediaQuery.of(context).size.width * 0.9,
         height: 80,
         toastDuration: Duration(seconds: 3),
+        action: onRetry != null ? TextButton(
+          onPressed: () {
+            onRetry();
+            Navigator.of(context).pop();
+          },
+          child: Text('Retry', style: TextStyle(color: Colors.white)),
+        ) : null,
       ).show(context);
     }
   }
@@ -163,19 +193,18 @@ class NotificationService {
     required BuildContext context,
     required String title,
     required String message,
-  }) async {
-    await _vibrate(NotificationType.info);
+    bool showPopup = false,
+    bool playSound = false,
+  }) {
+    if (!showPopup) return; // Don't show info notifications unless explicitly requested
 
-    ElegantNotification.info(
-      title: Text(title),
-      description: Text(message),
-      position: Alignment.bottomCenter,
-      animation: AnimationType.fromBottom,
-      showProgressIndicator: false,
-      width: MediaQuery.of(context).size.width * 0.9,
-      height: 80,
-      toastDuration: Duration(seconds: 2),
-    ).show(context);
+    _showNotification(
+      context: context,
+      title: title,
+      message: message,
+      type: ErrorType.otherError,
+      playSound: playSound,
+    );
   }
 
   static void showNoInternet({

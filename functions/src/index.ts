@@ -178,7 +178,99 @@ async function processImageRequest(request: GenerationRequest): Promise<void> {
 }
 
 async function processVideoRequest(request: GenerationRequest): Promise<void> {
-  // Implementation
+  const apiKey = await getAvailableApiKey('predis');
+  if (!apiKey) {
+    throw new Error('No available API key for Predis service');
+  }
+
+  try {
+    // Update status to processing
+    await db.collection('generation_queue').doc(request.id).update({
+      status: 'processing',
+      startedAt: FieldValue.serverTimestamp(),
+      apiKeyUsed: apiKey,
+      serviceUsed: 'predis',
+      progress: 0,
+    });
+
+    // Send request to Predis API
+    const response = await fetch('https://brain.predis.ai/predis_api/v1/create_content/', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        brand_id: request.metadata?.brand_id,
+        media_type: 'video',
+        caption: request.prompt,
+        video_type: 'short',
+        duration: request.metadata?.duration || '30',
+        input_language: request.metadata?.input_language || 'english',
+        output_language: request.metadata?.output_language || 'english',
+        ...request.metadata,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(`Predis API error: ${errorData.message || response.statusText}`);
+    }
+
+    const data = await response.json();
+    
+    // Update request with result
+    await db.collection('generation_queue').doc(request.id).update({
+      status: 'completed',
+      completedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      result: data.urls?.video || data.url,
+      progress: 100,
+      metadata: {
+        ...request.metadata,
+        predisResponse: data,
+      },
+    });
+
+    // Log successful generation
+    await db.collection('generation_logs').add({
+      requestId: request.id,
+      userId: request.userId,
+      type: 'video',
+      status: 'success',
+      timestamp: FieldValue.serverTimestamp(),
+      apiKeyUsed: apiKey,
+      serviceUsed: 'predis',
+      tokensUsed: request.tokensUsed,
+    });
+
+  } catch (error) {
+    console.error(`Error processing video request ${request.id}:`, error);
+    
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    
+    // Update request with error
+    await db.collection('generation_queue').doc(request.id).update({
+      status: request.attempts >= request.maxAttempts ? 'failed' : 'pending',
+      error: errorMessage,
+      updatedAt: FieldValue.serverTimestamp(),
+      progress: 0,
+    });
+
+    // Log failed generation
+    await db.collection('generation_logs').add({
+      requestId: request.id,
+      userId: request.userId,
+      type: 'video',
+      status: 'error',
+      error: errorMessage,
+      timestamp: FieldValue.serverTimestamp(),
+      apiKeyUsed: apiKey,
+      serviceUsed: 'predis',
+    });
+
+    throw error;
+  }
 }
 
 async function processAudioRequest(request: GenerationRequest): Promise<void> {

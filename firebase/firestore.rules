@@ -1,0 +1,21 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /generation_queue/{requestId} {
+      allow read: if request.auth != null && (
+        resource.data.userId == request.auth.uid || 
+        request.auth.token.admin == true
+      );
+      allow write: if request.auth != null;
+    }
+    
+    match /api_requests/{requestId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    match /users/{userId} {
+      allow read, write: if request.auth != null && 
+        (userId == request.auth.uid || request.auth.token.admin == true);
+    }
+  }
+}

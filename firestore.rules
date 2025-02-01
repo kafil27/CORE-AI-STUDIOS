@@ -12,10 +12,8 @@ service cloud.firestore {
 
     // Users collection
     match /users/{userId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.auth.uid == userId;
-      allow update: if isOwner(userId);
-      allow delete: if false; // Prevent user deletion
+      allow read, write: if request.auth != null && 
+        (userId == request.auth.uid || request.auth.token.admin == true);
     }
 
     // Chats collection
@@ -32,10 +30,16 @@ service cloud.firestore {
 
     // Generation requests queue
     match /generation_queue/{requestId} {
-      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update: if false; // Only cloud functions can update queue status
-      allow delete: if false;
+      allow read: if request.auth != null && (
+        resource.data.userId == request.auth.uid || 
+        request.auth.token.admin == true
+      );
+      allow write: if request.auth != null;
+    }
+
+    // API requests tracking
+    match /api_requests/{requestId} {
+      allow read, write: if request.auth != null;
     }
   }
 } 

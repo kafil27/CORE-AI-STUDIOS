@@ -56,7 +56,7 @@ dependencies:
   audioplayers: ^5.2.1
   permission_handler: ^11.3.0
   downloadsfolder: ^1.2.0
-  flutter_animated_loadingkit: ^0.0.7
+  loading_animation_widget: ^1.3.0
   cool_dropdown: ^2.1.1
   overscroll_pop: ^0.1.1
   
