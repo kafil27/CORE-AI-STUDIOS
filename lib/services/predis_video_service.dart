@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
@@ -29,12 +30,11 @@ class PredisVideoService {
   static const int _maxTemplateRequestsPerMinute = 10;
   static const Duration _rateLimitWindow = Duration(minutes: 1);
   
-  // Queue management
-  static const int _maxConcurrentRequests = 5;
-  static const Duration _queueCheckInterval = Duration(seconds: 10);
-  static const Duration _queueTimeout = Duration(minutes: 2);
-  static const Duration _requestTimeout = Duration(seconds: 30);
-  static const int _maxRetries = 3;
+  // Queue management constants
+  static const int maxConcurrentRequests = 40;
+  static const Duration queueTimeout = Duration(minutes: 1);  // Changed to 1 minute
+  static const Duration requestTimeout = Duration(seconds: 30);
+  static const int maxRetries = 3;
   
   PredisVideoService() : _config = AIServiceFactory.getConfig(AIServiceType.predisAI) {
     _validateConfig();
@@ -54,47 +54,30 @@ class PredisVideoService {
   Future<bool> _checkRateLimit(String type) async {
     try {
       final now = DateTime.now();
-      final windowStart = now.subtract(_rateLimitWindow);
-      
-      // Check global API key rate limit
-      final requestsRef = _firestore.collection('api_requests')
-          .where('api_key', isEqualTo: _config.apiKey)
-          .where('timestamp', isGreaterThanOrEqualTo: windowStart);
-      
-      final snapshot = await requestsRef.get();
-      final requestCount = snapshot.docs.length; // Use docs.length instead of count()
-      
-      if (requestCount >= _maxRequestsPerMinute) {
-        debugPrint('[PredisVideo] API key rate limit exceeded: $requestCount requests in last minute');
-        return false;
-      }
+      final oneMinuteAgo = now.subtract(Duration(minutes: 1));
 
-      // Also check if we have an active request in processing state
-      final activeRequestsRef = _firestore.collection('generation_queue')
-          .where('userId', isEqualTo: _auth.currentUser?.uid)
-          .where('status', isEqualTo: GenerationStatus.processing.value)
-          .where('type', isEqualTo: GenerationType.video.toString().split('.').last);
-      
-      final activeSnapshot = await activeRequestsRef.get();
-      if (activeSnapshot.docs.isNotEmpty) {
-        debugPrint('[PredisVideo] User has active request in processing');
-        return false;
-      }
-      
-      return true;
-    } catch (e, stack) {
-      debugPrint('[PredisVideo] Rate limit check error: $e\n$stack');
-      return true; // Allow request on error to prevent blocking
+      final snapshot = await _firestore
+          .collection('api_requests')
+          .where('type', isEqualTo: type)
+          .where('timestamp', isGreaterThan: Timestamp.fromDate(oneMinuteAgo))
+          .get();
+
+      return snapshot.docs.length < 60; // Allow 60 requests per minute
+    } catch (e) {
+      print('Error checking rate limit: $e');
+      return true; // Allow request if rate limit check fails
     }
   }
 
   Future<void> _recordApiRequest(String type) async {
-    await _firestore.collection('api_requests').add({
-      'type': type,
-      'timestamp': FieldValue.serverTimestamp(),
-      'userId': _auth.currentUser?.uid,
-      'api_key': _config.apiKey,
-    });
+    try {
+      await _firestore.collection('api_requests').add({
+        'type': type,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      print('Error recording API request: $e');
+    }
   }
 
   Future<void> _cleanupQueue() async {
@@ -103,80 +86,40 @@ class PredisVideoService {
       final user = _auth.currentUser;
       if (user == null) return;
 
-      final timeoutThreshold = DateTime.now().subtract(_queueTimeout);
-      final requestTimeoutThreshold = DateTime.now().subtract(_requestTimeout);
-      
-      // Get stale requests (in queue too long)
-      final staleRequests = await _firestore
+      final now = DateTime.now();
+      final batch = _firestore.batch();
+
+      // Find all requests older than 1 minute
+      final oldRequests = await _firestore
           .collection('generation_queue')
           .where('userId', isEqualTo: user.uid)
-          .where('type', isEqualTo: GenerationType.video.toString().split('.').last)
           .where('status', whereIn: [
             GenerationStatus.queued.value,
             GenerationStatus.processing.value,
+            GenerationStatus.pending.value,
           ])
-          .where('updatedAt', isLessThan: timeoutThreshold)
+          .where('updatedAt', isLessThan: Timestamp.fromDate(now.subtract(queueTimeout)))
           .get();
 
-      // Get timed out requests (no response from API)
-      final timedOutRequests = await _firestore
-          .collection('generation_queue')
-          .where('userId', isEqualTo: user.uid)
-          .where('type', isEqualTo: GenerationType.video.toString().split('.').last)
-          .where('status', isEqualTo: GenerationStatus.processing.value)
-          .where('updatedAt', isLessThan: requestTimeoutThreshold)
-          .get();
+      debugPrint('[PredisVideo] Found ${oldRequests.docs.length} old requests to cleanup');
 
-      final batch = _firestore.batch();
-      
-      // Handle stale requests
-      for (final doc in staleRequests.docs) {
-        final data = doc.data();
-        final retryCount = data['retryCount'] as int? ?? 0;
+      for (final doc in oldRequests.docs) {
+        final request = GenerationRequest.fromMap(doc.data());
         
-        if (retryCount < _maxRetries) {
-          // Auto-retry
-          batch.update(doc.reference, {
-            'status': GenerationStatus.queued.value,
-            'retryCount': FieldValue.increment(1),
-            'error': null,
-            'updatedAt': FieldValue.serverTimestamp(),
-          });
-        } else {
-          // Mark as failed after max retries
-          batch.update(doc.reference, {
-            'status': GenerationStatus.failed.value,
-            'error': 'Request timed out after ${_maxRetries} retries',
-            'updatedAt': FieldValue.serverTimestamp(),
-          });
-        }
-      }
+        // Archive the request
+        await _firestore.collection('generation_history').add({
+          ...doc.data(),
+          'status': GenerationStatus.failed.value,
+          'error': 'Request expired after ${queueTimeout.inMinutes} minute',
+          'archivedAt': FieldValue.serverTimestamp(),
+        });
 
-      // Handle timed out requests
-      for (final doc in timedOutRequests.docs) {
-        final data = doc.data();
-        final retryCount = data['retryCount'] as int? ?? 0;
-        
-        if (retryCount < _maxRetries) {
-          // Auto-retry
-          batch.update(doc.reference, {
-            'status': GenerationStatus.queued.value,
-            'retryCount': FieldValue.increment(1),
-            'error': null,
-            'updatedAt': FieldValue.serverTimestamp(),
-          });
-        } else {
-          // Mark as failed after max retries
-          batch.update(doc.reference, {
-            'status': GenerationStatus.failed.value,
-            'error': 'API request timed out after ${_maxRetries} retries',
-            'updatedAt': FieldValue.serverTimestamp(),
-          });
-        }
+        // Delete from active queue
+        batch.delete(doc.reference);
       }
 
       await batch.commit();
-      debugPrint('[PredisVideo] Queue cleanup completed. Processed ${staleRequests.docs.length} stale and ${timedOutRequests.docs.length} timed out requests');
+      debugPrint('[PredisVideo] Queue cleanup completed');
     } catch (e, stack) {
       debugPrint('[PredisVideo] Queue cleanup error: $e\n$stack');
     }
@@ -184,27 +127,22 @@ class PredisVideoService {
 
   Future<int> _getQueuePosition(String requestId) async {
     try {
-      debugPrint('[PredisVideo] Getting queue position for request: $requestId');
       final user = _auth.currentUser;
       if (user == null) return 0;
 
-      // First cleanup the queue
-      await _cleanupQueue();
-
-      // Get only active requests in queue
+      // Get only active requests in queue ordered by creation time (newest first)
       final queueSnapshot = await _firestore
           .collection('generation_queue')
           .where('userId', isEqualTo: user.uid)
           .where('status', isEqualTo: GenerationStatus.queued.value)
-          .where('type', isEqualTo: GenerationType.video.toString().split('.').last)
-          .orderBy('createdAt')
+          .orderBy('createdAt', descending: true)  // LIFO order
           .orderBy('__name__')
           .get();
       
       final position = queueSnapshot.docs
           .indexWhere((doc) => doc.id == requestId);
       
-      debugPrint('[PredisVideo] Queue position: ${position >= 0 ? position + 1 : 0}');
+      debugPrint('[PredisVideo] Queue position for $requestId: ${position >= 0 ? position + 1 : 0}');
       return position >= 0 ? position + 1 : 0;
     } catch (e, stack) {
       debugPrint('[PredisVideo] Error getting queue position: $e\n$stack');
@@ -214,100 +152,159 @@ class PredisVideoService {
 
   Future<void> _processQueue() async {
     try {
-      final user = _auth.currentUser;
-      if (user == null) return;
-
-      // Get next request in queue
-      final nextRequest = await _firestore
+      debugPrint('[PredisVideo] Starting queue processing');
+      
+      // Get pending requests ordered by creation time (newest first)
+      final snapshot = await _firestore
           .collection('generation_queue')
-          .where('userId', isEqualTo: user.uid)
-          .where('status', isEqualTo: GenerationStatus.queued.value)
-          .where('type', isEqualTo: GenerationType.video.toString().split('.').last)
-          .orderBy('createdAt')
-          .limit(1)
+          .where('status', isEqualTo: GenerationStatus.pending.value)
+          .orderBy('createdAt', descending: true)
+          .limit(maxConcurrentRequests)
           .get();
 
-      if (nextRequest.docs.isEmpty) return;
+      if (snapshot.docs.isEmpty) {
+        debugPrint('[PredisVideo] No pending requests to process');
+        return;
+      }
 
-      final request = nextRequest.docs.first;
-      final data = request.data();
+      debugPrint('[PredisVideo] Processing ${snapshot.docs.length} requests');
 
-      // Start processing
-      await request.reference.update({
-        'status': GenerationStatus.processing.value,
+      // Process requests concurrently
+      await Future.wait(
+        snapshot.docs.map((doc) async {
+          final request = GenerationRequest.fromMap(doc.data());
+          
+          try {
+            // Update status to processing
+            await _firestore.collection('generation_queue').doc(doc.id).update({
+              'status': GenerationStatus.processing.value,
+              'startedAt': FieldValue.serverTimestamp(),
+              'updatedAt': FieldValue.serverTimestamp(),
+            });
+
+            // Process the request
+            await _processRequest(request);
+          } catch (e) {
+            debugPrint('[PredisVideo] Error processing request ${doc.id}: $e');
+            
+            if (request.retryCount < maxRetries) {
+              await _firestore.collection('generation_queue').doc(doc.id).update({
+                'status': GenerationStatus.pending.value,
+                'error': 'Failed attempt ${request.retryCount + 1}/$maxRetries: $e',
+                'retryCount': FieldValue.increment(1),
+                'updatedAt': FieldValue.serverTimestamp(),
+              });
+            } else {
+              // Move to history and remove from queue
+              await _firestore.collection('generation_history').add({
+                ...doc.data(),
+                'status': GenerationStatus.failed.value,
+                'error': 'Failed after $maxRetries attempts: $e',
+                'archivedAt': FieldValue.serverTimestamp(),
+              });
+              
+              await doc.reference.delete();
+            }
+          }
+        }),
+      );
+
+      debugPrint('[PredisVideo] Queue processing completed');
+    } catch (e, stack) {
+      debugPrint('[PredisVideo] Error processing queue: $e\n$stack');
+    }
+  }
+
+  Future<void> _processRequest(GenerationRequest request) async {
+    try {
+      // Check rate limit before processing
+      if (!await _checkRateLimit('video')) {
+        throw Exception('Rate limit exceeded. Please try again later.');
+      }
+
+      // Make the API request
+      final response = await _makeApiRequest(request);
+      
+      // Update request with success
+      await _firestore.collection('generation_queue').doc(request.id).update({
+        'status': GenerationStatus.completed.value,
+        'result': response['video_url'],
+        'completedAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
-        'startedAt': FieldValue.serverTimestamp(),
       });
 
-      // Make API call to Predis with timeout
-      try {
-        final response = await http.post(
-          Uri.parse('https://brain.predis.ai/predis_api/v1/create_video/'),
-          headers: {
-            'Authorization': 'Bearer ${_config.apiKey}',
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode({
-            'prompt': data['prompt'],
-            'brand_id': _config.defaultParams['brand_id'],
-            ...data['metadata'],
-          }),
-        ).timeout(_requestTimeout);
-
-        if (response.statusCode == 200) {
-          await request.reference.update({
-            'status': GenerationStatus.completed.value,
-            'progress': 100,
-            'updatedAt': FieldValue.serverTimestamp(),
-            'result': jsonDecode(response.body),
-          });
-        } else if (response.statusCode == 429) {
-          // Rate limit hit, requeue with backoff
-          await request.reference.update({
-            'status': GenerationStatus.queued.value,
-            'error': 'Rate limited, will retry automatically',
-            'updatedAt': FieldValue.serverTimestamp(),
-            'nextRetryAt': FieldValue.serverTimestamp(),
-          });
-        } else {
-          final retryCount = data['retryCount'] as int? ?? 0;
-          if (retryCount < _maxRetries) {
-            // Auto-retry on error
-            await request.reference.update({
-              'status': GenerationStatus.queued.value,
-              'retryCount': FieldValue.increment(1),
-              'error': 'API Error: ${response.statusCode}, retrying...',
-              'updatedAt': FieldValue.serverTimestamp(),
-            });
-          } else {
-            await request.reference.update({
-              'status': GenerationStatus.failed.value,
-              'error': 'API Error: ${response.statusCode} after ${_maxRetries} retries',
-              'updatedAt': FieldValue.serverTimestamp(),
-            });
-          }
-        }
-      } catch (e) {
-        final retryCount = data['retryCount'] as int? ?? 0;
-        if (retryCount < _maxRetries) {
-          // Auto-retry on error
-          await request.reference.update({
-            'status': GenerationStatus.queued.value,
-            'retryCount': FieldValue.increment(1),
-            'error': 'Request error: $e, retrying...',
-            'updatedAt': FieldValue.serverTimestamp(),
-          });
-        } else {
-          await request.reference.update({
-            'status': GenerationStatus.failed.value,
-            'error': 'Request failed after ${_maxRetries} retries: $e',
-            'updatedAt': FieldValue.serverTimestamp(),
-          });
-        }
+      // Record API request
+      await _recordApiRequest('video');
+    } catch (e) {
+      if (request.retryCount < maxRetries) {
+        await _firestore.collection('generation_queue').doc(request.id).update({
+          'status': GenerationStatus.pending.value,
+          'error': 'Failed attempt ${request.retryCount + 1}/$maxRetries: $e',
+          'retryCount': FieldValue.increment(1),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      } else {
+        await _firestore.collection('generation_queue').doc(request.id).update({
+          'status': GenerationStatus.failed.value,
+          'error': 'Failed after $maxRetries attempts: $e',
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
       }
-    } catch (e, stack) {
-      debugPrint('[PredisVideo] Queue processing error: $e\n$stack');
+      rethrow;
     }
+  }
+
+  Future<String?> submitRequest(String prompt, BuildContext context) async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) throw Exception('User not authenticated');
+
+      // Cleanup old requests first
+      await _cleanupQueue();
+
+      // Create request document
+      final requestRef = _firestore.collection('generation_queue').doc();
+      final request = GenerationRequest(
+        id: requestRef.id,
+        userId: user.uid,
+        type: GenerationType.video,
+        prompt: prompt,
+        status: GenerationStatus.pending,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+        priority: 1,
+        attempts: 0,
+        maxAttempts: maxRetries,
+        progress: 0,
+        retryCount: 0,
+        metadata: {},
+        tokensUsed: 50,
+      );
+
+      await requestRef.set(request.toMap());
+      debugPrint('[PredisVideo] Created new request: ${requestRef.id}');
+      
+      // Start queue processing
+      _processQueue();
+      
+      return requestRef.id;
+    } catch (e, stack) {
+      debugPrint('[PredisVideo] Error submitting request: $e\n$stack');
+      rethrow;
+    }
+  }
+
+  Future<int> _getActiveRequestsCount(String userId) async {
+    final snapshot = await _firestore
+        .collection('generation_queue')
+        .where('userId', isEqualTo: userId)
+        .where('status', whereIn: [
+          GenerationStatus.pending.value,
+          GenerationStatus.processing.value,
+        ])
+        .get();
+
+    return snapshot.docs.length;
   }
 
   Future<List<GenerationRequest>> getRecentVideos({
@@ -614,6 +611,33 @@ class PredisVideoService {
         message: 'Failed to retry generation request',
         technicalDetails: e.toString(),
       );
+    }
+  }
+
+  Future<Map<String, dynamic>> _makeApiRequest(GenerationRequest request) async {
+    try {
+      final response = await http.post(
+        Uri.parse('${_config.baseUrl}/create_video/'),
+        headers: _config.headers,
+        body: jsonEncode({
+          'prompt': request.prompt,
+          'brand_id': _config.defaultParams['brand_id'],
+          ...request.metadata,
+        }),
+      ).timeout(requestTimeout);
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else if (response.statusCode == 429) {
+        throw Exception('Rate limit exceeded. Please try again later.');
+      } else {
+        throw Exception('API Error: ${response.statusCode}');
+      }
+    } catch (e) {
+      if (e is TimeoutException) {
+        throw Exception('Request timed out. Please try again.');
+      }
+      rethrow;
     }
   }
 } 

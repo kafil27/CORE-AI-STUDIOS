@@ -8,10 +8,10 @@ import '../ui/widgets/insufficient_balance_popup.dart';
 import 'package:flutter/services.dart';
 
 enum NotificationType {
+  info,
   success,
   error,
   warning,
-  info
 }
 
 class NotificationService {
@@ -19,8 +19,12 @@ class NotificationService {
   static bool _hasVibrator = false;
   static bool _hasCustomVibrationsSupport = false;
   static bool _hasVibrationPermission = false;
+  static bool _initialized = false;
 
   static Future<void> initialize() async {
+    if (_initialized) return;
+    _initialized = true;
+
     try {
       // On Android, we don't need explicit permission for vibration
       // On iOS, vibration is controlled by system settings
@@ -87,22 +91,54 @@ class NotificationService {
     required BuildContext context,
     required String title,
     required String message,
-    required ErrorType type,
+    NotificationType type = NotificationType.info,
+    bool showPopup = false,
     VoidCallback? onRetry,
+    String? technicalDetails,
     bool playSound = false,
   }) {
-    if (playSound) {
-      SystemSound.play(SystemSoundType.alert);
+    // Don't show info notifications unless explicitly requested
+    if (type == NotificationType.info && !showPopup) return;
+
+    // For errors and important notifications, show the custom popup
+    if (showPopup || type == NotificationType.error) {
+      showDialog(
+        context: context,
+        builder: (context) => CustomErrorPopup(
+          errorType: _getErrorType(type),
+          message: message,
+          technicalDetails: technicalDetails,
+          onRetry: onRetry,
+        ),
+      );
+      return;
     }
 
-    showDialog(
-      context: context,
-      builder: (context) => CustomErrorPopup(
-        errorType: type,
-        message: message,
-        onRetry: onRetry,
+    // For other notifications, use elegant_notification
+    ElegantNotification(
+      title: Text(
+        title,
+        style: TextStyle(
+          color: _getNotificationColor(type),
+          fontWeight: FontWeight.bold,
+        ),
       ),
-    );
+      description: Text(message),
+      icon: Icon(
+        _getNotificationIcon(type),
+        color: _getNotificationColor(type),
+      ),
+      progressIndicatorColor: _getNotificationColor(type),
+      autoDismiss: true,
+      showProgressIndicator: false,
+      width: 400,
+      onDismiss: () {},
+    ).show(context);
+
+    // Play sound only if explicitly requested
+    if (playSound) {
+      _playNotificationSound(type);
+    }
   }
 
   static void showError({
@@ -196,13 +232,15 @@ class NotificationService {
     bool showPopup = false,
     bool playSound = false,
   }) {
-    if (!showPopup) return; // Don't show info notifications unless explicitly requested
-
+    // Only show info notifications if explicitly requested
+    if (!showPopup) return;
+    
     _showNotification(
       context: context,
       title: title,
       message: message,
-      type: ErrorType.otherError,
+      type: NotificationType.info,
+      showPopup: showPopup,
       playSound: playSound,
     );
   }
@@ -251,5 +289,50 @@ class NotificationService {
 
   static void dispose() {
     _audioPlayer.dispose();
+  }
+
+  static ErrorType _getErrorType(NotificationType type) {
+    switch (type) {
+      case NotificationType.error:
+        return ErrorType.serviceError;
+      case NotificationType.warning:
+        return ErrorType.otherError;
+      case NotificationType.info:
+        return ErrorType.otherError;
+      case NotificationType.success:
+        return ErrorType.otherError;
+    }
+  }
+
+  static Color _getNotificationColor(NotificationType type) {
+    switch (type) {
+      case NotificationType.error:
+        return Colors.red;
+      case NotificationType.warning:
+        return Colors.orange;
+      case NotificationType.info:
+        return Colors.blue;
+      case NotificationType.success:
+        return Colors.green;
+    }
+  }
+
+  static IconData _getNotificationIcon(NotificationType type) {
+    switch (type) {
+      case NotificationType.error:
+        return Icons.error_outline;
+      case NotificationType.warning:
+        return Icons.warning_amber_rounded;
+      case NotificationType.info:
+        return Icons.info_outline;
+      case NotificationType.success:
+        return Icons.check_circle_outline;
+    }
+  }
+
+  static void _playNotificationSound(NotificationType type) {
+    // Implementation depends on your sound requirements
+    // For now, we'll use system sounds
+    SystemSound.play(SystemSoundType.alert);
   }
 } 
