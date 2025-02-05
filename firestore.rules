@@ -29,38 +29,29 @@ service cloud.firestore {
     match /usage_history/{document} {
       allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
       allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if false; // Prevent modification of usage history
+      allow update, delete: if false;
     }
 
     // Generation requests queue
     match /generation_queue/{requestId} {
-      allow read: if isAuthenticated() && (
-        resource.data.userId == request.auth.uid || 
-        isAdmin()
-      );
+      // Allow reading queue for authenticated users
+      allow list: if isAuthenticated();
+      allow get: if isAuthenticated();
       
-      // Allow create with proper user ID
+      // Allow creating new requests
       allow create: if isAuthenticated() && 
-        request.resource.data.userId == request.auth.uid &&
-        request.resource.data.status in ['pending', 'queued'] &&
-        request.resource.data.createdAt == request.time;
+        request.resource.data.userId == request.auth.uid;
       
-      // Allow updates only to own requests and valid status transitions
+      // Allow updating own requests or if admin
       allow update: if isAuthenticated() && (
         resource.data.userId == request.auth.uid ||
         isAdmin()
-      ) && (
-        // Allow status updates
-        request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['status', 'updatedAt', 'error', 'progress', 'retryCount', 'result'])
       );
       
-      // Allow delete only for completed/failed requests
+      // Allow deleting own requests or if admin
       allow delete: if isAuthenticated() && (
         resource.data.userId == request.auth.uid ||
         isAdmin()
-      ) && (
-        resource.data.status in ['completed', 'failed', 'cancelled']
       );
     }
 
@@ -71,20 +62,15 @@ service cloud.firestore {
         isAdmin()
       );
       
-      // Only allow creation, no updates or deletes
-      allow create: if isAuthenticated() && (
-        request.resource.data.userId == request.auth.uid ||
-        isAdmin()
-      );
+      allow create: if isAuthenticated() && 
+        request.resource.data.userId == request.auth.uid;
+      
       allow update, delete: if false;
     }
 
     // API requests tracking
     match /api_requests/{requestId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && 
-        request.resource.data.keys().hasOnly(['type', 'timestamp']);
-      allow update, delete: if false;
+      allow read, write: if isAuthenticated();
     }
   }
 } 

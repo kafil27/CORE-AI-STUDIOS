@@ -153,11 +153,14 @@ class PredisVideoService {
   Future<void> _processQueue() async {
     try {
       debugPrint('[PredisVideo] Starting queue processing');
-      
+      final user = _auth.currentUser;
+      if (user == null) return;
+
       // Get pending requests ordered by creation time (newest first)
       final snapshot = await _firestore
           .collection('generation_queue')
           .where('status', isEqualTo: GenerationStatus.pending.value)
+          .where('userId', isEqualTo: user.uid)  // Only process own requests
           .orderBy('createdAt', descending: true)
           .limit(maxConcurrentRequests)
           .get();
@@ -184,6 +187,13 @@ class PredisVideoService {
 
             // Process the request
             await _processRequest(request);
+
+            // Update status to completed
+            await _firestore.collection('generation_queue').doc(doc.id).update({
+              'status': GenerationStatus.completed.value,
+              'completedAt': FieldValue.serverTimestamp(),
+              'updatedAt': FieldValue.serverTimestamp(),
+            });
           } catch (e) {
             debugPrint('[PredisVideo] Error processing request ${doc.id}: $e');
             
@@ -195,15 +205,11 @@ class PredisVideoService {
                 'updatedAt': FieldValue.serverTimestamp(),
               });
             } else {
-              // Move to history and remove from queue
-              await _firestore.collection('generation_history').add({
-                ...doc.data(),
+              await _firestore.collection('generation_queue').doc(doc.id).update({
                 'status': GenerationStatus.failed.value,
                 'error': 'Failed after $maxRetries attempts: $e',
-                'archivedAt': FieldValue.serverTimestamp(),
+                'updatedAt': FieldValue.serverTimestamp(),
               });
-              
-              await doc.reference.delete();
             }
           }
         }),
