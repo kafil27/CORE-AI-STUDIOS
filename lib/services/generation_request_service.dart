@@ -33,10 +33,11 @@ final userRequestsProvider = StreamProvider<List<GenerationRequest>>((ref) {
 class GenerationRequestService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  final TokenService _tokenService = TokenService(
-    FirebaseAuth.instance,
-    FirebaseFirestore.instance,
-  );
+  late final TokenService _tokenService;
+
+  GenerationRequestService() {
+    _tokenService = TokenService(_firestore, _auth);
+  }
 
   int _getTokenCost(types.GenerationType type) {
     switch (type) {
@@ -46,8 +47,9 @@ class GenerationRequestService {
         return 50;
       case types.GenerationType.audio:
         return 30;
+      case types.GenerationType.text:
+        return 10;
     }
-// Default cost
   }
 
   Future<String?> submitRequest({
@@ -59,6 +61,7 @@ class GenerationRequestService {
     try {
       final user = _auth.currentUser;
       if (user == null) {
+        if (!context.mounted) return null;
         NotificationService.showError(
           title: 'Authentication Error',
           message: 'Please sign in to submit a generation request.',
@@ -81,20 +84,16 @@ class GenerationRequestService {
         userId: user.uid,
         type: type,
         prompt: prompt,
-        status: types.GenerationStatus.pending,
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
-        priority: 1,
-        attempts: 0,
-        maxAttempts: 3,
-        progress: 0,
-        retryCount: 0,
+        status: 'pending',
+        timestamp: DateTime.now(),
+        tokenCost: tokenCost,
         metadata: metadata,
-        tokensUsed: tokenCost,
+        progress: 0,
+        queuePosition: null,
+        estimatedTimeRemaining: null,
       );
 
-      // Save request to Firestore
-      await requestRef.set(request.toMap());
+      await requestRef.set(request.toJson());
 
       // Deduct tokens
       await _tokenService.deductTokens(
@@ -108,9 +107,13 @@ class GenerationRequestService {
 
       return requestRef.id;
     } catch (e) {
+      if (!context.mounted) return null;
+      
       if (e is TokenServiceException) {
         if (e.error == TokenServiceError.insufficientTokens) {
           final balance = await _tokenService.getTokenBalance();
+          if (!context.mounted) return null;
+          
           NotificationService.showInsufficientBalance(
             context: context,
             required: _getTokenCost(type),
@@ -174,6 +177,7 @@ class GenerationRequestService {
         );
       }
     } catch (e) {
+      if (!context.mounted) return;
       NotificationService.showError(
         context: context,
         title: 'Cancel Error',
@@ -212,6 +216,7 @@ class GenerationRequestService {
         'error': null,
       });
     } catch (e) {
+      if (!context.mounted) return;
       NotificationService.showError(
         context: context,
         title: 'Retry Error',

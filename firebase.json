@@ -35,7 +35,7 @@
         ]
     },
     "storage": {
-        "rules": "storage.rules"
+        "rules": "./storage.rules"
     },
     "emulators": {
         "functions": {

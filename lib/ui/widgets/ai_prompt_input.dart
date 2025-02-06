@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../services/token_service.dart';
-import '../../services/notification_service.dart';
-import '../../providers/token_provider.dart';
 import '../../models/generation_type.dart';
+import '../../services/notification_service.dart';
 
 class AIPromptInput extends StatefulWidget {
   final GenerationType type;
@@ -65,6 +62,10 @@ class _AIPromptInputState extends State<AIPromptInput> {
       case GenerationType.audio:
         _tokenCost = 30;
         _maxLength = 2000;
+        break;
+      case GenerationType.text:
+        _tokenCost = 0;
+        _maxLength = 1000;
         break;
     }
   }
@@ -136,6 +137,32 @@ class _AIPromptInputState extends State<AIPromptInput> {
     widget.onSubmit(prompt);
   }
 
+  String _getHintText() {
+    switch (widget.type) {
+      case GenerationType.image:
+        return 'Describe the image you want to generate...';
+      case GenerationType.video:
+        return 'Describe the video you want to generate...';
+      case GenerationType.audio:
+        return 'Describe the audio you want to generate...';
+      case GenerationType.text:
+        return 'Enter your text prompt...';
+    }
+  }
+
+  String _getButtonText() {
+    switch (widget.type) {
+      case GenerationType.image:
+        return 'Generate Image';
+      case GenerationType.video:
+        return 'Generate Video';
+      case GenerationType.audio:
+        return 'Generate Audio';
+      case GenerationType.text:
+        return 'Generate Text';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final color = widget.accentColor ?? Theme.of(context).primaryColor;
@@ -161,7 +188,7 @@ class _AIPromptInputState extends State<AIPromptInput> {
             focusNode: widget.focusNode,
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
-              hintText: widget.hintText,
+              hintText: _getHintText(),
               hintStyle: TextStyle(color: Colors.grey[600]),
               border: InputBorder.none,
               counterText: '${_promptController.text.length}/$_maxLength',
@@ -234,7 +261,7 @@ class _AIPromptInputState extends State<AIPromptInput> {
                   label: widget.isLoading
                     ? const SizedBox.shrink()
                     : Text(
-                        widget.submitLabel,
+                        _getButtonText(),
                         style: const TextStyle(color: Colors.white),
                       ),
                   style: ElevatedButton.styleFrom(

@@ -1,29 +1,71 @@
 rules_version = '2';
+
 service firebase.storage {
   match /b/{bucket}/o {
-    // User generated content
-    match /users/{userId}/{allPaths=**} {
-      // Allow read if user is authenticated and owns the content
-      allow read: if request.auth != null && request.auth.uid == userId;
-      
-      // Allow write if user is authenticated, owns the content, and file size is under limit
-      allow write: if request.auth != null 
-                  && request.auth.uid == userId
-                  && request.resource.size < 10 * 1024 * 1024;
-      
-      // Allow delete if user owns the content
-      allow delete: if request.auth != null && request.auth.uid == userId;
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
     }
     
-    // Public content (like shared generations)
-    match /public/{allPaths=**} {
-      allow read: if true;  // Anyone can read public content
-      allow write: if request.auth != null;  // Only authenticated users can write
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
     }
     
-    // Temporary storage for processing
-    match /temp/{userId}/{allPaths=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+    function hasValidContentType() {
+      return request.resource.contentType.matches('image/.*') ||
+             request.resource.contentType.matches('video/.*') ||
+             request.resource.contentType.matches('audio/.*') ||
+             request.resource.contentType.matches('application/json');
+    }
+    
+    function isValidFileSize() {
+      return request.resource.size < 100 * 1024 * 1024; // 100MB limit
+    }
+    
+    function isPublicFile(filePath) {
+      return exists(/databases/(default)/documents/social_feed/$(filePath)) &&
+             get(/databases/(default)/documents/social_feed/$(filePath)).data.isPublic == true;
+    }
+
+    // User profile content (avatars, profile media, etc.)
+    match /users/{userId}/{fileName} {
+      allow read: if isAuthenticated() && (isOwner(userId) || isPublicFile(fileName));
+      allow write: if isAuthenticated() && isOwner(userId) 
+                  && hasValidContentType() 
+                  && isValidFileSize();
+      allow delete: if isAuthenticated() && isOwner(userId);
+    }
+
+    // AI-Generated content
+    match /generated/{userId}/{type}/{fileName} {
+      allow read: if isAuthenticated() && (
+        isOwner(userId) || 
+        isPublicFile(fileName)
+      );
+      // Allow write from Cloud Functions
+      allow write: if request.auth.token.firebase.sign_in_provider == 'google.com';
+      allow delete: if isAuthenticated() && isOwner(userId);
+    }
+
+    // Temporary uploads (for processing)
+    match /uploads/{userId}/{fileName} {
+      allow read: if isAuthenticated() && isOwner(userId);
+      allow write: if isAuthenticated() && 
+                  isOwner(userId) && 
+                  hasValidContentType() && 
+                  request.resource.size < 50 * 1024 * 1024; // 50MB limit for uploads
+      allow delete: if isAuthenticated() && isOwner(userId);
+    }
+
+    // Public assets (app resources, shared content)
+    match /public/{fileName} {
+      allow read: if true;
+      allow write: if false; // Only writable by server
+    }
+
+    // Catch-all rule for unmatched paths
+    match /{allPaths=**} {
+      allow read, write: if false; // Deny all unmatched paths
     }
   }
 } 

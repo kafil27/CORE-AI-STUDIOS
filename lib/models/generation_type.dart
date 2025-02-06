@@ -2,6 +2,46 @@ enum GenerationType {
   image,
   video,
   audio,
+  text;
+
+  String get displayName {
+    switch (this) {
+      case GenerationType.image:
+        return 'Image';
+      case GenerationType.video:
+        return 'Video';
+      case GenerationType.audio:
+        return 'Audio';
+      case GenerationType.text:
+        return 'Text';
+    }
+  }
+
+  int get defaultTokenCost {
+    switch (this) {
+      case GenerationType.image:
+        return 10;
+      case GenerationType.video:
+        return 50;
+      case GenerationType.audio:
+        return 30;
+      case GenerationType.text:
+        return 5;
+    }
+  }
+
+  String get icon {
+    switch (this) {
+      case GenerationType.image:
+        return 'image';
+      case GenerationType.video:
+        return 'video';
+      case GenerationType.audio:
+        return 'audio';
+      case GenerationType.text:
+        return 'text';
+    }
+  }
 }
 
 enum GenerationStatus {

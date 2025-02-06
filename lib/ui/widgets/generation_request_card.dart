@@ -25,15 +25,32 @@ class GenerationRequestCard extends ConsumerWidget {
     this.isExpanded = false,
   }) : super(key: key);
 
-  Color _getStatusColor(GenerationStatus status) {
-    return switch (status) {
-      GenerationStatus.queued => Colors.orange,
-      GenerationStatus.pending => Colors.blue,
-      GenerationStatus.processing => Colors.amber,
-      GenerationStatus.completed => Colors.green,
-      GenerationStatus.failed => Colors.red,
-      GenerationStatus.cancelled => Colors.grey,
-    };
+  Color _getStatusColor() {
+    switch (request.status) {
+      case 'pending':
+        return Colors.orange;
+      case 'processing':
+        return Colors.blue;
+      case 'completed':
+        return Colors.green;
+      case 'failed':
+        return Colors.red;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  Widget _buildStatusIndicator() {
+    if (request.status == 'pending') {
+      return _buildPendingIndicator();
+    } else if (request.status == 'processing') {
+      return _buildProcessingIndicator();
+    } else if (request.status == 'completed') {
+      return _buildCompletedIndicator();
+    } else if (request.status == 'failed') {
+      return _buildFailedIndicator();
+    }
+    return const SizedBox();
   }
 
   Widget _buildProgressIndicator() {
@@ -47,7 +64,7 @@ class GenerationRequestCard extends ConsumerWidget {
             value: request.progress! / 100,
             backgroundColor: Colors.grey[800],
             valueColor: AlwaysStoppedAnimation<Color>(
-              _getStatusColor(request.status),
+              _getStatusColor(),
             ),
           ),
           if (request.estimatedTimeRemaining != null) ...[
@@ -124,6 +141,97 @@ class GenerationRequestCard extends ConsumerWidget {
     );
   }
 
+  Widget _buildPendingIndicator() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 16,
+          height: 16,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            valueColor: AlwaysStoppedAnimation<Color>(_getStatusColor()),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          'Pending...',
+          style: TextStyle(
+            color: _getStatusColor(),
+            fontSize: 12,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildProcessingIndicator() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 16,
+          height: 16,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            value: request.progress != null ? request.progress! / 100 : null,
+            valueColor: AlwaysStoppedAnimation<Color>(_getStatusColor()),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          request.progress != null ? '${request.progress}%' : 'Processing...',
+          style: TextStyle(
+            color: _getStatusColor(),
+            fontSize: 12,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCompletedIndicator() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          Icons.check_circle,
+          size: 16,
+          color: _getStatusColor(),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          'Completed',
+          style: TextStyle(
+            color: _getStatusColor(),
+            fontSize: 12,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFailedIndicator() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          Icons.error,
+          size: 16,
+          color: _getStatusColor(),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          'Failed',
+          style: TextStyle(
+            color: _getStatusColor(),
+            fontSize: 12,
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Card(
@@ -142,10 +250,10 @@ class GenerationRequestCard extends ConsumerWidget {
                     vertical: 4,
                   ),
                   decoration: BoxDecoration(
-                    color: _getStatusColor(request.status).withOpacity(0.1),
+                    color: _getStatusColor().withOpacity(0.1),
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color: _getStatusColor(request.status).withOpacity(0.5),
+                      color: _getStatusColor().withOpacity(0.5),
                     ),
                   ),
                   child: Row(
@@ -158,13 +266,13 @@ class GenerationRequestCard extends ConsumerWidget {
                                 ? Icons.error
                                 : Icons.pending,
                         size: 16,
-                        color: _getStatusColor(request.status),
+                        color: _getStatusColor(),
                       ),
                       const SizedBox(width: 4),
                       Text(
                         request.statusText,
                         style: TextStyle(
-                          color: _getStatusColor(request.status),
+                          color: _getStatusColor(),
                           fontSize: 12,
                           fontWeight: FontWeight.bold,
                         ),

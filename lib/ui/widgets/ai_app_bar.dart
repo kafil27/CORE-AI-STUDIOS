@@ -52,6 +52,8 @@ class AIAppBar extends ConsumerWidget implements PreferredSizeWidget {
         return Colors.blue.shade400;
       case GenerationType.audio:
         return Colors.purple.shade400;
+      case GenerationType.text:
+        return Colors.green.shade400;
     }
   }
 
@@ -63,6 +65,8 @@ class AIAppBar extends ConsumerWidget implements PreferredSizeWidget {
         return Icons.image;
       case GenerationType.audio:
         return Icons.music_note;
+      case GenerationType.text:
+        return Icons.text_fields;
     }
   }
 

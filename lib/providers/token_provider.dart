@@ -7,9 +7,9 @@ final firebaseAuthProvider = Provider<FirebaseAuth>((ref) => FirebaseAuth.instan
 final firestoreProvider = Provider<FirebaseFirestore>((ref) => FirebaseFirestore.instance);
 
 final tokenServiceProvider = Provider<TokenService>((ref) {
-  final auth = ref.watch(firebaseAuthProvider);
   final firestore = ref.watch(firestoreProvider);
-  return TokenService(auth, firestore);
+  final auth = ref.watch(firebaseAuthProvider);
+  return TokenService(firestore, auth);
 });
 
 final tokenBalanceProvider = StreamProvider<int>((ref) {

@@ -14,10 +14,35 @@ service cloud.firestore {
       return request.auth.token.admin == true;
     }
 
+    function hasSubscription() {
+      return isAuthenticated() && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.subscriptionLevel != null;
+    }
+    
+    function hasEnoughTokens(tokenCost) {
+      let userData = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return userData.tokens >= tokenCost;
+    }
+
     // Users collection
     match /users/{userId} {
-      allow read, write: if request.auth != null && 
-        (userId == request.auth.uid || isAdmin());
+      allow read: if isOwner(userId);
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update: if isOwner(userId) && 
+        (!request.resource.data.diff(resource.data).affectedKeys()
+          .hasAny(['tokens', 'subscriptionLevel']));
+      
+      // Token history subcollection
+      match /token_history/{historyId} {
+        allow read: if isOwner(userId);
+        allow write: if false; // Only writable by server
+      }
+      
+      // Token reservations subcollection
+      match /token_reservations/{reservationId} {
+        allow read: if isOwner(userId);
+        allow write: if false; // Only writable by server
+      }
     }
 
     // Chats collection
@@ -32,45 +57,66 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // Generation requests queue
+    // Generation queue collection
     match /generation_queue/{requestId} {
-      // Allow reading queue for authenticated users
-      allow list: if isAuthenticated();
-      allow get: if isAuthenticated();
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.metadata.isPublic == true
+      );
       
-      // Allow creating new requests
       allow create: if isAuthenticated() && 
-        request.resource.data.userId == request.auth.uid;
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.status == 'pending' &&
+        hasEnoughTokens(request.resource.data.tokenCost);
       
-      // Allow updating own requests or if admin
-      allow update: if isAuthenticated() && (
-        resource.data.userId == request.auth.uid ||
-        isAdmin()
-      );
+      allow update: if isAuthenticated() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == request.auth.uid &&
+        (
+          // Allow status updates for cancellation
+          (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) &&
+           request.resource.data.status == 'cancelled') ||
+          // Allow progress updates
+          (request.resource.data.diff(resource.data).affectedKeys().hasAny(['progress', 'queuePosition', 'estimatedTimeRemaining']))
+        );
       
-      // Allow deleting own requests or if admin
-      allow delete: if isAuthenticated() && (
-        resource.data.userId == request.auth.uid ||
-        isAdmin()
-      );
+      allow delete: if isAuthenticated() &&
+        resource.data.userId == request.auth.uid &&
+        (resource.data.status == 'completed' || resource.data.status == 'failed' || resource.data.status == 'cancelled');
     }
 
     // Generation history
     match /generation_history/{requestId} {
-      allow read: if isAuthenticated() && (
-        resource.data.userId == request.auth.uid || 
-        isAdmin()
-      );
-      
-      allow create: if isAuthenticated() && 
-        request.resource.data.userId == request.auth.uid;
-      
-      allow update, delete: if false;
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow write: if false; // Only writable by server
     }
 
     // API requests tracking
     match /api_requests/{requestId} {
       allow read, write: if isAuthenticated();
+    }
+
+    // Social feed collection
+    match /social_feed/{postId} {
+      allow read: if true;
+      allow create: if false; // Only writable by server
+      allow update: if isAuthenticated() && 
+        resource.data.userId == request.auth.uid &&
+        !request.resource.data.diff(resource.data).affectedKeys()
+          .hasAny(['type', 'prompt', 'result', 'createdAt']);
+      allow delete: if false;
+      
+      match /likes/{userId} {
+        allow read: if true;
+        allow write: if isAuthenticated() && userId == request.auth.uid;
+      }
+      
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if isAuthenticated();
+        allow update, delete: if isAuthenticated() && 
+          resource.data.userId == request.auth.uid;
+      }
     }
   }
 } 

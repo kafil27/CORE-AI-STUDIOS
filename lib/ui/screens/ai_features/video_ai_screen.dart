@@ -18,13 +18,19 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../../widgets/tips_section.dart';
 import '../../../providers/token_provider.dart';
 import '../../../services/generation_request_service.dart';
+import '../../../config/ai_service_config.dart';
 
-final videoServiceProvider = Provider((ref) => VideoGenerationService());
+final videoServiceProvider = Provider<PredisVideoService>((ref) => PredisVideoService(
+  firestore: FirebaseFirestore.instance,
+  auth: FirebaseAuth.instance,
+  config: AIServiceFactory.getConfig(AIServiceType.predisAI),
+));
+
 final generationRequestServiceProvider = Provider((ref) => GenerationRequestService());
 
 final recentVideosProvider = StreamProvider.autoDispose<List<GenerationRequest>>((ref) async* {
   debugPrint('[VideoAI] Starting recent videos stream');
-  final predisService = PredisVideoService();
+  final predisService = ref.watch(videoServiceProvider);
   final navigator = ref.read(navigatorKeyProvider);
   
   while (true) {
@@ -40,7 +46,7 @@ final recentVideosProvider = StreamProvider.autoDispose<List<GenerationRequest>>
       }
     } catch (e, stack) {
       debugPrint('[VideoAI] Error fetching videos: $e\n$stack');
-      rethrow; // Propagate error for proper UI handling
+      rethrow;
     }
     await Future.delayed(const Duration(seconds: 10));
   }
@@ -72,7 +78,7 @@ final generationRequestProvider = StreamProvider.family<GenerationRequest?, Stri
 });
 
 class VideoAIScreen extends ConsumerStatefulWidget {
-  const VideoAIScreen({super.key});
+  const VideoAIScreen({Key? key}) : super(key: key);
 
   @override
   ConsumerState<VideoAIScreen> createState() => _VideoAIScreenState();
@@ -80,24 +86,38 @@ class VideoAIScreen extends ConsumerStatefulWidget {
 
 class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
   final _scrollController = ScrollController();
-  final _predisService = PredisVideoService();
+  late final PredisVideoService _predisService;
   String? _currentRequestId;
   final _focusNode = FocusNode();
   bool _isPromptValid = false;
   String _prompt = '';
+  final TextEditingController _promptController = TextEditingController();
+  bool _isGenerating = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _predisService = PredisVideoService(
+      firestore: FirebaseFirestore.instance,
+      auth: FirebaseAuth.instance,
+      config: AIServiceFactory.getConfig(AIServiceType.predisAI),
+    );
+  }
 
   @override
   void dispose() {
     _focusNode.dispose();
+    _promptController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final recentVideos = ref.watch(recentVideosProvider);
+    final videoService = ref.watch(videoServiceProvider);
 
     // Show notification when service changes
-    ref.listen<VideoGenerationService>(videoServiceProvider, (previous, next) {
+    ref.listen(videoServiceProvider, (previous, next) {
       NotificationService.showSuccess(
         context: context,
         title: 'Service Ready',
@@ -388,31 +408,33 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
     );
   }
 
-  Color _getStatusColor(GenerationStatus? status) {
+  Color _getStatusColor(String status) {
     switch (status) {
-      case GenerationStatus.completed:
-        return Colors.green;
-      case GenerationStatus.failed:
-        return Colors.red.shade400;
-      case GenerationStatus.cancelled:
+      case 'pending':
         return Colors.orange;
+      case 'processing':
+        return Colors.blue;
+      case 'completed':
+        return Colors.green;
+      case 'failed':
+        return Colors.red;
       default:
-        return Colors.red.shade400;
+        return Colors.grey;
     }
   }
 
-  IconData _getStatusIcon(GenerationStatus? status) {
+  IconData _getStatusIcon(String status) {
     switch (status) {
-      case GenerationStatus.completed:
-        return Icons.check_circle_outline;
-      case GenerationStatus.failed:
-        return Icons.error_outline;
-      case GenerationStatus.cancelled:
-        return Icons.cancel_outlined;
-      case GenerationStatus.queued:
+      case 'pending':
         return Icons.queue;
-      case GenerationStatus.processing:
+      case 'processing':
         return Icons.movie_creation_outlined;
+      case 'completed':
+        return Icons.check_circle_outline;
+      case 'failed':
+        return Icons.error_outline;
+      case 'queued':
+        return Icons.queue;
       default:
         return Icons.pending_outlined;
     }
@@ -476,5 +498,70 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
       }
       rethrow;
     }
+  }
+
+  Widget _buildStatusIndicator(GenerationRequest request) {
+    if (request.status == 'pending') {
+      return _buildPendingIndicator();
+    } else if (request.status == 'processing') {
+      return _buildProcessingIndicator();
+    } else if (request.status == 'completed') {
+      return _buildCompletedIndicator();
+    } else if (request.status == 'failed') {
+      return _buildFailedIndicator();
+    }
+    return const SizedBox();
+  }
+
+  Widget _buildPendingIndicator() {
+    // Implementation of _buildPendingIndicator
+    return const SizedBox();
+  }
+
+  Widget _buildProcessingIndicator() {
+    // Implementation of _buildProcessingIndicator
+    return const SizedBox();
+  }
+
+  Widget _buildCompletedIndicator() {
+    // Implementation of _buildCompletedIndicator
+    return const SizedBox();
+  }
+
+  Widget _buildFailedIndicator() {
+    // Implementation of _buildFailedIndicator
+    return const SizedBox();
+  }
+
+  Widget _buildStatusBadge(GenerationRequest request) {
+    final color = _getStatusColor(request.status);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(
+          red: color.red.toDouble(),
+          green: color.green.toDouble(),
+          blue: color.blue.toDouble(),
+          alpha: 25.5, // 0.1 * 255
+        ),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: color.withValues(
+            red: color.red.toDouble(),
+            green: color.green.toDouble(),
+            blue: color.blue.toDouble(),
+            alpha: 127.5, // 0.5 * 255
+          ),
+        ),
+      ),
+      child: Text(
+        request.statusText,
+        style: TextStyle(
+          color: color,
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
   }
 } 
