@@ -4,6 +4,19 @@ enum GenerationType {
   audio,
   text;
 
+  String get value {
+    switch (this) {
+      case GenerationType.image:
+        return 'image';
+      case GenerationType.video:
+        return 'video';
+      case GenerationType.audio:
+        return 'audio';
+      case GenerationType.text:
+        return 'text';
+    }
+  }
+
   String get displayName {
     switch (this) {
       case GenerationType.image:

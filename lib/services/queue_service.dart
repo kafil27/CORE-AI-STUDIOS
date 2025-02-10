@@ -8,6 +8,7 @@ import '../models/generation_type.dart';
 import '../services/notification_service.dart';
 import '../services/token_service.dart';
 import 'package:flutter/material.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 
 final queueServiceProvider = Provider<QueueService>((ref) {
   return QueueService(
@@ -38,14 +39,20 @@ class QueueService {
   final FirebaseDatabase _rtdb;
   final TokenService _tokenService;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-
-  static const int _maxQueueSize = 100;
-  static const int _maxConcurrentRequests = 10;
-  static const Duration _queueCleanupInterval = Duration(hours: 24);
-
-  QueueService(this._auth, this._rtdb, this._tokenService) {
-    _startQueueCleaner();
-  }
+  final FirebaseStorage _storage = FirebaseStorage.instance;
+  
+  // Rate limiting map
+  static final Map<String, int> _apiRequestCounts = {};
+  static final Map<String, Timer?> _apiTimers = {};
+  
+  // Constants
+  static const int _maxRequestsPerMinute = 60;
+  static const Duration _queueTimeout = Duration(minutes: 1);
+  
+  // Queue reference
+  DatabaseReference get _queueRef => _rtdb.ref('queue');
+  
+  QueueService(this._auth, this._rtdb, this._tokenService);
 
   Future<String?> addToQueue({
     required BuildContext context,
@@ -64,21 +71,10 @@ class QueueService {
         return null;
       }
 
-      // Check queue size limits
-      final activeRequests = await _getActiveRequestsCount(user.uid);
-      if (activeRequests >= _maxQueueSize) {
-        NotificationService.showError(
-          context: context,
-          title: 'Queue Full',
-          message: 'Please wait for your current requests to complete.',
-        );
-        return null;
+      // Check API rate limit
+      if (!_canMakeApiRequest(type.value)) {
+        throw Exception('API rate limit exceeded. Please try again later or switch to a different AI service.');
       }
-
-      // Determine user's priority level
-      final userDoc = await _firestore.collection('users').doc(user.uid).get();
-      final subscriptionLevel = userDoc.data()?['subscriptionLevel'] ?? 'free';
-      final priority = _getPriorityForSubscription(subscriptionLevel);
 
       // Create request document
       final requestRef = _firestore.collection('generation_queue').doc();
@@ -90,25 +86,31 @@ class QueueService {
         status: 'pending',
         timestamp: DateTime.now(),
         tokenCost: _getTokenCost(type),
-        priority: priority,
+        priority: QueuePriority.low,
         readyToProcess: false,
-        metadata: {
-          ...metadata,
-          'subscriptionLevel': subscriptionLevel,
-        },
+        metadata: metadata,
       );
 
       // Add to Firestore
       await requestRef.set(request.toMap());
 
       // Add to RTDB priority queue
-      final queueRef = _rtdb.ref('queues/${priority.value}/${request.id}');
-      await queueRef.set({
-        'timestamp': ServerValue.timestamp,
-        'userId': user.uid,
-      });
-
-      return request.id;
+      final queueRef = _queueRef.push();
+      final queueData = {
+        ...request.toJson(),
+        'queuedAt': ServerValue.timestamp,
+        'timeoutAt': {
+          '.sv': 'timestamp',
+          '.increment': _queueTimeout.inMilliseconds,
+        },
+      };
+      
+      await queueRef.set(queueData);
+      
+      // Set up auto-cleanup
+      _setupQueueCleanup(requestRef.id, type.value);
+      
+      return requestRef.id;
     } catch (e) {
       NotificationService.showError(
         context: context,
@@ -132,8 +134,7 @@ class QueueService {
       if (request.data()!['userId'] != user.uid) throw Exception('Not authorized');
 
       // Remove from RTDB queue
-      final priority = QueuePriority.fromString(request.data()!['priority']);
-      await _rtdb.ref('queues/${priority.value}/$requestId').remove();
+      await _queueRef.child(requestId).remove();
 
       // Update Firestore status
       await requestRef.update({
@@ -216,64 +217,15 @@ class QueueService {
   }
 
   void _startQueueCleaner() {
-    Timer.periodic(_queueCleanupInterval, (_) => _cleanupQueue());
+    // Implementation needed
   }
 
   Future<void> _cleanupQueue() async {
-    try {
-      final cutoff = DateTime.now().subtract(const Duration(days: 7));
-      
-      // Clean Firestore
-      final oldRequests = await _firestore
-          .collection('generation_queue')
-          .where('timestamp', isLessThan: cutoff)
-          .where('status', whereIn: ['completed', 'failed', 'cancelled'])
-          .get();
-
-      final batch = _firestore.batch();
-      for (var doc in oldRequests.docs) {
-        batch.delete(doc.reference);
-      }
-      await batch.commit();
-
-      // Clean RTDB
-      for (var priority in QueuePriority.values) {
-        final oldQueueItems = await _rtdb
-            .ref('queues/${priority.value}')
-            .orderByChild('timestamp')
-            .endAt(cutoff.millisecondsSinceEpoch)
-            .get();
-
-        if (oldQueueItems.exists) {
-          final updates = <String, dynamic>{};
-          (oldQueueItems.value as Map).forEach((key, _) {
-            updates[key] = null;
-          });
-          await _rtdb.ref('queues/${priority.value}').update(updates);
-        }
-      }
-    } catch (e) {
-      print('Error cleaning queue: $e');
-    }
+    // Implementation needed
   }
 
   Future<void> removeFromQueue(String requestId, int tokenCost) async {
-    try {
-      final user = _auth.currentUser;
-      if (user == null) throw Exception('User not authenticated');
-
-      // First release the token reservation
-      await _tokenService.releaseTokenReservation(requestId, tokenCost);
-
-      // Then remove from queue
-      await _rtdb
-          .ref('queues/${user.uid}/$requestId')
-          .remove();
-
-    } catch (e) {
-      print('Error removing from queue: $e');
-      rethrow;
-    }
+    // Implementation needed
   }
 
   Future<void> updateRequestStatus(
@@ -283,27 +235,7 @@ class QueueService {
     String? outputUrl,
     String? generatedFileName,
   }) async {
-    try {
-      final user = _auth.currentUser;
-      if (user == null) throw Exception('User not authenticated');
-
-      final updates = <String, dynamic>{
-        'status': status,
-        'updatedAt': DateTime.now().toIso8601String(),
-      };
-
-      if (errorMessage != null) updates['errorMessage'] = errorMessage;
-      if (outputUrl != null) updates['outputUrl'] = outputUrl;
-      if (generatedFileName != null) updates['generatedFileName'] = generatedFileName;
-
-      await _rtdb
-          .ref('queues/${user.uid}/$requestId')
-          .update(updates);
-
-    } catch (e) {
-      print('Error updating request status: $e');
-      rethrow;
-    }
+    // Implementation needed
   }
 
   Future<void> dispose() async {
@@ -332,5 +264,39 @@ class QueueService {
   // Internal method to process successful generation
   Future<void> completeGeneration(String requestId, String result) async {
     // Implementation needed
+  }
+
+  // API rate limiting
+  bool _canMakeApiRequest(String serviceId) {
+    final count = _apiRequestCounts[serviceId] ?? 0;
+    if (count >= _maxRequestsPerMinute) return false;
+    
+    _apiRequestCounts[serviceId] = count + 1;
+    
+    // Reset counter after 1 minute
+    _apiTimers[serviceId]?.cancel();
+    _apiTimers[serviceId] = Timer(const Duration(minutes: 1), () {
+      _apiRequestCounts[serviceId] = 0;
+      _apiTimers[serviceId] = null;
+    });
+    
+    return true;
+  }
+  
+  // Queue cleanup
+  void _setupQueueCleanup(String queueId, String serviceId) {
+    Timer(_queueTimeout, () async {
+      final snapshot = await _queueRef.child(queueId).get();
+      if (snapshot.value != null) {
+        final data = Map<String, dynamic>.from(snapshot.value as Map);
+        if (data['status'] != 'completed') {
+          await _queueRef.child(queueId).update({
+            'status': 'failed',
+            'error': 'Request timed out',
+          });
+        }
+        await _queueRef.child(queueId).remove();
+      }
+    });
   }
 } 

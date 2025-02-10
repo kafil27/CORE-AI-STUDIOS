@@ -27,27 +27,20 @@ service firebase.storage {
              get(/databases/(default)/documents/social_feed/$(filePath)).data.isPublic == true;
     }
 
-    // User profile content (avatars, profile media, etc.)
-    match /users/{userId}/{fileName} {
-      allow read: if isAuthenticated() && (isOwner(userId) || isPublicFile(fileName));
-      allow write: if isAuthenticated() && isOwner(userId) 
-                  && hasValidContentType() 
-                  && isValidFileSize();
-      allow delete: if isAuthenticated() && isOwner(userId);
-    }
-
-    // AI-Generated content
+    // Generated content
     match /generated/{userId}/{type}/{fileName} {
       allow read: if isAuthenticated() && (
         isOwner(userId) || 
         isPublicFile(fileName)
       );
-      // Allow write from Cloud Functions
-      allow write: if request.auth.token.firebase.sign_in_provider == 'google.com';
+      allow write: if isAuthenticated() && 
+                  isOwner(userId) && 
+                  hasValidContentType() && 
+                  isValidFileSize();
       allow delete: if isAuthenticated() && isOwner(userId);
     }
 
-    // Temporary uploads (for processing)
+    // User uploads (for processing)
     match /uploads/{userId}/{fileName} {
       allow read: if isAuthenticated() && isOwner(userId);
       allow write: if isAuthenticated() && 
@@ -57,15 +50,15 @@ service firebase.storage {
       allow delete: if isAuthenticated() && isOwner(userId);
     }
 
-    // Public assets (app resources, shared content)
+    // Public assets
     match /public/{fileName} {
       allow read: if true;
       allow write: if false; // Only writable by server
     }
 
-    // Catch-all rule for unmatched paths
+    // Catch-all rule
     match /{allPaths=**} {
-      allow read, write: if false; // Deny all unmatched paths
+      allow read, write: if false;
     }
   }
 } 

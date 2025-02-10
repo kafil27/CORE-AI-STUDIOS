@@ -1,0 +1,52 @@
+{
+  "rules": {
+    "queue": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      "$queueId": {
+        ".validate": "newData.hasChildren(['userId', 'type', 'prompt', 'status', 'createdAt'])",
+        "userId": {
+          ".validate": "newData.val() === auth.uid"
+        },
+        "status": {
+          ".validate": "newData.val().matches(/^(pending|processing|completed|failed|cancelled)$/)"
+        },
+        "createdAt": {
+          ".validate": "newData.val() <= now"
+        },
+        "expiresAt": {
+          ".validate": "newData.val() <= (now + 60000)" // 1 minute timeout
+        },
+        "progress": {
+          ".validate": "newData.val() >= 0 && newData.val() <= 100"
+        },
+        "error": {
+          ".validate": "true"
+        },
+        "result": {
+          ".validate": "true"
+        },
+        "metadata": {
+          ".validate": "true"
+        },
+        "$other": {
+          ".validate": true
+        },
+        ".indexOn": ["status", "createdAt", "expiresAt", "userId"]
+      }
+    },
+    "rate_limits": {
+      "$userId": {
+        ".read": "auth != null && auth.uid === $userId",
+        ".write": "auth != null && auth.uid === $userId",
+        "requests": {
+          ".validate": "newData.val() >= 0",
+          ".indexOn": ".value"
+        },
+        "lastReset": {
+          ".validate": "newData.val() <= now"
+        }
+      }
+    }
+  }
+} 

@@ -155,7 +155,7 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
                           type: MaterialType.transparency,
                           child: AIPromptInput(
                             type: GenerationType.video,
-                            onSubmit: _generateVideo,
+                            onSubmit: _handleGenerate,
                             isLoading: _currentRequestId != null,
                             hintText: 'Describe the video you want to create...',
                             submitIcon: Icons.movie_creation,
@@ -475,28 +475,49 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
     );
   }
 
-  Future<void> _generateVideo(String prompt) async {
-    debugPrint('[VideoAI] Starting video generation with prompt: $prompt');
-    _focusNode.unfocus();
-    
+  Future<void> _handleGenerate(String prompt) async {
+    if (prompt.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a prompt')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isGenerating = true;
+      _prompt = prompt;
+    });
+
     try {
-      final requestId = await _predisService.generateVideo(
-        context: context,
-        prompt: prompt,
+      final videoService = ref.read(videoServiceProvider);
+      final requestId = await videoService.generateVideo(
+        prompt,
+        {
+          'type': 'video',
+          'prompt': prompt,
+          'status': 'pending',
+        },
       );
 
       if (requestId != null) {
-        debugPrint('[VideoAI] Generation started with requestId: $requestId');
-        setState(() => _currentRequestId = requestId);
+        setState(() {
+          _currentRequestId = requestId;
+        });
       } else {
-        debugPrint('[VideoAI] Failed to start generation - no requestId returned');
+        throw Exception('Failed to start video generation');
       }
-    } catch (e, stack) {
-      debugPrint('[VideoAI] Generation error: $e\n$stack');
+    } catch (e) {
       if (mounted) {
-        setState(() => _currentRequestId = null);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: ${e.toString()}')),
+        );
       }
-      rethrow;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isGenerating = false;
+        });
+      }
     }
   }
 

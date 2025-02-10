@@ -246,7 +246,14 @@ class TokenService {
           .limit(limit)
           .get();
 
-      return snapshot.docs.map((doc) => doc.data()).toList();
+      return snapshot.docs.map((doc) {
+        final data = doc.data();
+        // Convert Firestore timestamp to DateTime
+        if (data['timestamp'] is Timestamp) {
+          data['timestamp'] = (data['timestamp'] as Timestamp).toDate();
+        }
+        return data;
+      }).toList();
     } catch (e) {
       throw TokenServiceException(
         'Failed to get usage history: $e',

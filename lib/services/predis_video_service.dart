@@ -7,6 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../config/ai_service_config.dart';
 import '../models/generation_request.dart';
 import '../models/generation_type.dart';
+import '../ui/widgets/custom_error_popup.dart';
 import 'notification_service.dart';
 
 enum PredisVideoError {
@@ -67,21 +68,24 @@ class PredisVideoService {
                      (_config.defaultParams['brand_id']?.isNotEmpty ?? false);
   }
 
-  Future<bool> _checkRateLimit(String type) async {
+  Future<bool> _checkRateLimit() async {
     try {
-      final now = DateTime.now();
-      final oneMinuteAgo = now.subtract(Duration(minutes: 1));
+      final user = _auth.currentUser;
+      if (user == null) return false;
 
-      final snapshot = await _firestore
+      final now = DateTime.now();
+      final oneMinuteAgo = now.subtract(const Duration(minutes: 1));
+
+      final requests = await _firestore
           .collection('api_requests')
-          .where('type', isEqualTo: type)
+          .where('type', isEqualTo: 'video')
           .where('timestamp', isGreaterThan: Timestamp.fromDate(oneMinuteAgo))
           .get();
 
-      return snapshot.docs.length < 60; // Allow 60 requests per minute
+      return requests.size < _maxRequestsPerMinute;
     } catch (e) {
-      print('Error checking rate limit: $e');
-      return true; // Allow request if rate limit check fails
+      debugPrint('Error checking rate limit: $e');
+      return false;
     }
   }
 
@@ -168,9 +172,15 @@ class PredisVideoService {
 
   Future<void> _processQueue() async {
     try {
+      final user = _auth.currentUser;
+      if (user == null) return;
+
+      debugPrint('[PredisVideo] Processing queue...');
+      
       final snapshot = await _firestore
           .collection('generation_queue')
-          .where('status', isEqualTo: 'pending')
+          .where('status', isEqualTo: GenerationStatus.pending.value)
+          .where('userId', isEqualTo: user.uid)
           .orderBy('timestamp', descending: false)
           .limit(5)
           .get();
@@ -180,40 +190,48 @@ class PredisVideoService {
         return;
       }
 
-      // Process requests concurrently
-      await Future.wait(
-        snapshot.docs.map((doc) async {
-          final request = GenerationRequest.fromMap(doc.data());
+      // Process requests
+      for (final doc in snapshot.docs) {
+        final request = GenerationRequest.fromMap(doc.data());
+        try {
+          debugPrint('[PredisVideo] Processing request: ${request.id}');
           
-          try {
-            await _firestore.collection('generation_queue').doc(doc.id).update({
-              'status': 'processing',
-              'startedAt': FieldValue.serverTimestamp(),
-              'updatedAt': FieldValue.serverTimestamp(),
-            });
+          // Update status to processing
+          await _firestore.collection('generation_queue').doc(doc.id).update({
+            'status': GenerationStatus.processing.value,
+            'startedAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
 
-            await _processRequest(request);
+          // Make API request
+          final response = await _makeApiRequest(request);
+          
+          // Update with success
+          await _firestore.collection('generation_queue').doc(doc.id).update({
+            'status': GenerationStatus.completed.value,
+            'result': response['video_url'],
+            'completedAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
 
-            await _firestore.collection('generation_queue').doc(doc.id).update({
-              'status': 'completed',
-              'completedAt': FieldValue.serverTimestamp(),
-              'updatedAt': FieldValue.serverTimestamp(),
-            });
-          } catch (e) {
-            debugPrint('[PredisVideo] Error processing request ${doc.id}: $e');
-            await _handleError(doc.id, e);
-          }
-        }),
-      );
-    } catch (e, stack) {
-      debugPrint('[PredisVideo] Error processing queue: $e\n$stack');
+          // Record API request
+          await _recordApiRequest('video');
+          
+          debugPrint('[PredisVideo] Successfully processed request: ${request.id}');
+        } catch (e) {
+          debugPrint('[PredisVideo] Error processing request ${doc.id}: $e');
+          await _handleError(doc.id, e);
+        }
+      }
+    } catch (e) {
+      debugPrint('[PredisVideo] Error processing queue: $e');
     }
   }
 
   Future<void> _processRequest(GenerationRequest request) async {
     try {
       // Check rate limit before processing
-      if (!await _checkRateLimit('video')) {
+      if (!await _checkRateLimit()) {
         throw Exception('Rate limit exceeded. Please try again later.');
       }
 
@@ -337,114 +355,54 @@ class PredisVideoService {
     }
   }
 
-  Future<String?> generateVideo({
-    required BuildContext context,
-    required String prompt,
-    Map<String, dynamic>? additionalParams,
-  }) async {
-    debugPrint('[PredisVideo] Starting video generation with prompt: $prompt');
-    if (!_isInitialized) {
-      NotificationService.showError(
-        context: context,
-        title: 'Configuration Error',
-        message: 'API key or Brand ID not configured properly',
-        technicalDetails: 'Please check your .env file and ensure PREDIS_API_KEY and PREDIS_BRAND_ID are set.',
-      );
-      return null;
-    }
-
+  Future<String?> generateVideo(String prompt, Map<String, dynamic> metadata) async {
     try {
       final user = _auth.currentUser;
-      if (user == null) throw Exception('User not authenticated');
-
-      // Cleanup queue first
-      await _cleanupQueue();
-
-      // Check user's token balance
-      final userDoc = await _firestore.collection('users').doc(user.uid).get();
-      if (!userDoc.exists) {
-        throw Exception('User document not found');
-      }
-      
-      final tokens = userDoc.data()?['tokens'] as int? ?? 0;
-      debugPrint('[PredisVideo] User token balance: $tokens');
-      if (tokens < 100) {
-        NotificationService.showError(
-          context: context,
-          title: 'Insufficient Tokens',
-          message: 'You need at least 100 tokens to generate a video',
-        );
-        return null;
+      if (user == null) {
+        throw Exception('Authentication required');
       }
 
       // Check rate limits
-      if (!await _checkRateLimit('video')) {
-        NotificationService.showError(
-          context: context,
-          title: 'Rate Limit',
-          message: 'The service is currently busy. Please try again in a minute.',
-        );
-        return null;
+      if (!await _checkRateLimit()) {
+        throw Exception('Rate limit exceeded. Please try again later.');
       }
 
-      // Create generation request
-      final requestRef = _firestore.collection('generation_queue').doc();
-      debugPrint('[PredisVideo] Creating request: ${requestRef.id}');
-      
-      final Map<String, dynamic> baseMetadata = {
-        'prompt': prompt,
-        'content_type': 'video',
-        'media_type': 'video',
-        'brand_id': _config.defaultParams['brand_id'],
-        'input_language': 'english',
-        'output_language': 'english',
-        'video_type': 'short',
-        'duration': '30',
-        'api_key': _config.apiKey,
-        'retryCount': 0,
-        'attempts': 0,
-        'maxAttempts': 3,
-        'priority': 1,
-      };
-
-      if (additionalParams != null) {
-        baseMetadata.addAll(additionalParams);
-      }
+      // Create request document
+      final requestId = _firestore.collection('generation_queue').doc().id;
+      debugPrint('[PredisVideo] Creating request: $requestId');
 
       final request = GenerationRequest(
-        id: requestRef.id,
+        id: requestId,
         userId: user.uid,
         type: GenerationType.video,
         prompt: prompt,
-        status: 'queued',
+        status: GenerationStatus.pending.value,
         timestamp: DateTime.now(),
-        tokenCost: 100,
-        progress: 0,
-        metadata: baseMetadata,
+        tokenCost: GenerationType.video.defaultTokenCost,
+        metadata: {
+          ...metadata,
+          'serviceType': 'video',
+          'provider': 'predis',
+        },
       );
 
-      // Save request without deducting tokens yet
-      await requestRef.set(request.toMap());
-      
-      debugPrint('[PredisVideo] Starting status listener');
-      _listenToRequestStatus(requestRef.id, context);
-
-      // Record API request for rate limiting
-      await _recordApiRequest('video');
-
-      // Start queue processing
-      _processQueue();
-
-      return requestRef.id;
-    } catch (e, stack) {
-      debugPrint('[PredisVideo] Generation error: $e\n$stack');
-      NotificationService.showError(
-        context: context,
-        title: 'Generation Error',
-        message: 'Failed to start video generation',
-        technicalDetails: e.toString(),
-      );
-      return null;
+      try {
+        await _firestore
+            .collection('generation_queue')
+            .doc(requestId)
+            .set(request.toJson());
+        
+        // Start queue processing
+        _processQueue();
+        
+        return requestId;
+      } catch (e) {
+        debugPrint('[PredisVideo] Generation error: $e');
+        throw Exception('Failed to start video generation: ${e.toString()}');
+      }
+    } catch (e) {
+      debugPrint('[PredisVideo] Generation error: $e');
+      throw Exception('Failed to generate video: ${e.toString()}');
     }
   }
 

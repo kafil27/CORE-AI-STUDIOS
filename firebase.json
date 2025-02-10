@@ -24,25 +24,18 @@
         "rules": "firestore.rules",
         "indexes": "firestore.indexes.json"
     },
-    "functions": {
-        "source": "functions",
-        "runtime": "nodejs18",
-        "ignore": [
-            "node_modules",
-            ".git",
-            "firebase-debug.log",
-            "firebase-debug.*.log"
-        ]
-    },
     "storage": {
         "rules": "./storage.rules"
     },
+    "database": {
+        "rules": "database.rules.json"
+    },
     "emulators": {
-        "functions": {
-            "port": 5001
-        },
         "firestore": {
             "port": 8080
+        },
+        "database": {
+            "port": 9000
         },
         "storage": {
             "port": 9199
