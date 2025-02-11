@@ -28,9 +28,8 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if isOwner(userId);
       allow create: if isAuthenticated() && request.auth.uid == userId;
-      allow update: if isOwner(userId) && 
-        (!request.resource.data.diff(resource.data).affectedKeys()
-          .hasAny(['tokens', 'admin', 'role']));
+      allow update: if isOwner(userId) || 
+        (isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['tokens']));
       
       // Token history subcollection
       match /token_history/{historyId} {
@@ -43,6 +42,16 @@ service cloud.firestore {
       match /token_reservations/{reservationId} {
         allow read: if isOwner(userId);
         allow write: if false; // Only writable by server
+      }
+
+      // Generated videos subcollection
+      match /generated_videos/{videoId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId);
+        allow update: if isOwner(userId) && 
+          !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['createdAt', 'userId']);
+        allow delete: if isOwner(userId);
       }
     }
 

@@ -9,6 +9,10 @@ import '../models/generation_request.dart';
 import '../models/generation_type.dart';
 import '../ui/widgets/custom_error_popup.dart';
 import 'notification_service.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:path/path.dart' as path;
+import 'dart:typed_data';
 
 enum PredisVideoError {
   invalidApiKey,
@@ -39,6 +43,8 @@ class PredisVideoService {
   static const int maxConcurrentRequests = 40;
   static const Duration queueTimeout = Duration(minutes: 1);  // Changed to 1 minute
   
+  final FirebaseStorage _storage = FirebaseStorage.instance;
+
   PredisVideoService({
     required FirebaseFirestore firestore,
     required FirebaseAuth auth,
@@ -52,20 +58,39 @@ class PredisVideoService {
   Future<void> _init() async {
     if (!_isInitialized) {
       debugPrint('[PredisVideo] Initializing service');
-      _isInitialized = true;
+      await dotenv.load(fileName: ".env");  // Ensure .env is loaded
+      await _validateConfig();
       _startQueueCleaner();
+      debugPrint('[PredisVideo] Service initialized: $_isInitialized');
     }
   }
 
-  void _validateConfig() {
-    if (_config.apiKey.isEmpty) {
-      debugPrint('WARNING: Predis API key is not set. Please check your .env file');
+  Future<void> _validateConfig() async {
+    final apiKey = _config.apiKey;
+    final brandId = _config.defaultParams['brand_id'];
+    
+    debugPrint('[PredisVideo] Validating config - API Key: ${apiKey.isEmpty ? 'empty' : 'present'}, Brand ID: ${brandId?.isEmpty ?? true ? 'empty' : 'present'}');
+    
+    if (apiKey.isEmpty) {
+      debugPrint('[PredisVideo] WARNING: Predis API key is not set in config');
+      _isInitialized = false;
+      return;
     }
-    if (_config.defaultParams['brand_id']?.isEmpty ?? true) {
-      debugPrint('WARNING: Predis Brand ID is not set. Please check your .env file');
+    if (brandId == null || brandId.isEmpty) {
+      debugPrint('[PredisVideo] WARNING: Predis Brand ID is not set in config');
+      _isInitialized = false;
+      return;
     }
-    _isInitialized = _config.apiKey.isNotEmpty && 
-                     (_config.defaultParams['brand_id']?.isNotEmpty ?? false);
+    
+    _isInitialized = true;
+    debugPrint('[PredisVideo] Configuration validated successfully');
+  }
+
+  Future<bool> _ensureInitialized() async {
+    if (!_isInitialized) {
+      await _init();
+    }
+    return _isInitialized;
   }
 
   Future<bool> _checkRateLimit() async {
@@ -206,10 +231,24 @@ class PredisVideoService {
           // Make API request
           final response = await _makeApiRequest(request);
           
-          // Update with success
+          // Store video information
+          final videoInfo = await _storeVideoInformation(
+            userId: request.userId,
+            videoUrl: response['video_url'],
+            prompt: request.prompt,
+            requestId: request.id,
+            metadata: request.metadata ?? {},
+          );
+
+          // Update request with success
           await _firestore.collection('generation_queue').doc(doc.id).update({
             'status': GenerationStatus.completed.value,
-            'result': response['video_url'],
+            'result': videoInfo['downloadUrl'],
+            'thumbnailUrl': videoInfo['thumbnailUrl'],
+            'videoId': videoInfo['videoId'],
+            'filename': videoInfo['filename'],
+            'postIds': response['post_ids'],
+            'progress': 100,
             'completedAt': FieldValue.serverTimestamp(),
             'updatedAt': FieldValue.serverTimestamp(),
           });
@@ -230,25 +269,43 @@ class PredisVideoService {
 
   Future<void> _processRequest(GenerationRequest request) async {
     try {
-      // Check rate limit before processing
       if (!await _checkRateLimit()) {
         throw Exception('Rate limit exceeded. Please try again later.');
       }
 
-      // Make the API request
+      await _firestore.collection('generation_queue').doc(request.id).update({
+        'status': GenerationStatus.processing.value,
+        'progress': 0,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
       final response = await _makeApiRequest(request);
       
+      // Store video information
+      final videoInfo = await _storeVideoInformation(
+        userId: request.userId,
+        videoUrl: response['video_url'],
+        prompt: request.prompt,
+        requestId: request.id,
+        metadata: request.metadata ?? {},
+      );
+
       // Update request with success
       await _firestore.collection('generation_queue').doc(request.id).update({
         'status': GenerationStatus.completed.value,
-        'result': response['video_url'],
+        'result': videoInfo['downloadUrl'],
+        'thumbnailUrl': videoInfo['thumbnailUrl'],
+        'videoId': videoInfo['videoId'],
+        'filename': videoInfo['filename'],
+        'postIds': response['post_ids'],
+        'progress': 100,
         'completedAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
-      // Record API request
       await _recordApiRequest('video');
     } catch (e) {
+      debugPrint('[PredisVideo] Error processing request: $e');
       await _handleError(request.id, e);
       rethrow;
     }
@@ -570,61 +627,191 @@ class PredisVideoService {
   }
 
   Future<Map<String, dynamic>> _makeApiRequest(GenerationRequest request) async {
+    if (!await _ensureInitialized()) {
+      debugPrint('[PredisVideo] Service not initialized. API Key: ${_config.apiKey.isEmpty ? 'empty' : 'present'}, Brand ID: ${_config.defaultParams['brand_id']?.isEmpty ?? true ? 'empty' : 'present'}');
+      throw Exception('Service not initialized. Please check your API configuration.');
+    }
+
     try {
-      final response = await http.post(
-        Uri.parse('${_config.baseUrl}/create_video/'),
-        headers: _config.headers,
-        body: jsonEncode({
-          'prompt': request.prompt,
-          'brand_id': _config.defaultParams['brand_id'],
-          ...?request.metadata,
-        }),
-      ).timeout(requestTimeout);
+      final apiKey = _config.apiKey;
+      final brandId = _config.defaultParams['brand_id'];
+
+      debugPrint('[PredisVideo] Making request with API Key: ${apiKey.isEmpty ? 'empty' : 'present'}, Brand ID: ${brandId?.isEmpty ?? true ? 'empty' : 'present'}');
+
+      if (apiKey.isEmpty || brandId == null || brandId.isEmpty) {
+        throw Exception('API configuration missing. Please check your environment variables.');
+      }
+
+      debugPrint('[PredisVideo] Making API request for request: ${request.id}');
+
+      // Create multipart request
+      final uri = Uri.parse('https://brain.predis.ai/predis_api/v1/create_content/');
+      final httpRequest = http.MultipartRequest('POST', uri);
+
+      // Add headers
+      httpRequest.headers.addAll({
+        'Authorization': apiKey.startsWith('Bearer ') ? apiKey : 'Bearer $apiKey',
+        'Accept': 'application/json',
+      });
+
+      // Add form fields
+      httpRequest.fields.addAll({
+        'brand_id': brandId,
+        'text': request.prompt,
+        'media_type': 'video',
+        'video_duration': 'long',
+        'input_language': 'english',
+        'output_language': 'english',
+        'color_palette_type': 'ai_suggested',
+      });
+
+      debugPrint('[PredisVideo] Sending request with fields: ${httpRequest.fields}');
+
+      // Send request
+      final streamedResponse = await httpRequest.send().timeout(
+        const Duration(minutes: 5),
+        onTimeout: () {
+          throw Exception('Request timed out');
+        },
+      );
+
+      // Get response
+      final response = await http.Response.fromStream(streamedResponse);
+      debugPrint('[PredisVideo] Response status: ${response.statusCode}');
+      debugPrint('[PredisVideo] Response body: ${response.body}');
 
       if (response.statusCode == 200) {
-        return jsonDecode(response.body);
+        final data = jsonDecode(response.body);
+        
+        if (data['errors'] != null && (data['errors'] as List).isNotEmpty) {
+          final error = data['errors'][0];
+          throw Exception('API Error: ${error['detail']} - ${error['solution']}');
+        }
+
+        final postId = data['post_ids']?[0];
+        if (postId == null) {
+          throw Exception('No post ID returned from API');
+        }
+
+        // Start polling for video status
+        final videoData = await _pollForVideoStatus(postId, brandId, apiKey);
+        
+        // Return response data
+        return {
+          'video_url': videoData['video_url'] ?? '',
+          'post_ids': [postId],
+          'post_status': videoData['status'] ?? 'completed',
+        };
       } else if (response.statusCode == 429) {
         throw Exception('Rate limit exceeded. Please try again later.');
       } else {
-        throw Exception('API Error: ${response.statusCode}');
+        final errorData = jsonDecode(response.body);
+        final errorMessage = errorData['message'] ?? 'Unknown error occurred';
+        throw Exception('API Error: $errorMessage');
       }
     } catch (e) {
-      if (e is TimeoutException) {
-        throw Exception('Request timed out. Please try again.');
-      }
+      debugPrint('[PredisVideo] API request error: $e');
       rethrow;
     }
   }
 
+  Future<Map<String, dynamic>> _pollForVideoStatus(String postId, String brandId, String apiKey) async {
+    debugPrint('[PredisVideo] Starting to poll for video status: $postId');
+    int attempts = 0;
+    const maxAttempts = 30; // 5 minutes with 10-second intervals
+    
+    while (attempts < maxAttempts) {
+      try {
+        final uri = Uri.parse('https://brain.predis.ai/predis_api/v1/get_posts/').replace(
+          queryParameters: {
+            'brand_id': brandId,
+            'post_id': postId,
+          },
+        );
+
+        final response = await http.get(
+          uri,
+          headers: {
+            'Authorization': apiKey.startsWith('Bearer ') ? apiKey : 'Bearer $apiKey',
+            'Accept': 'application/json',
+          },
+        );
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          final posts = data['posts'] as List;
+          
+          if (posts.isNotEmpty) {
+            final post = posts[0];
+            final status = post['status'];
+            final videoUrl = post['generated_media']?[0]?['url'];
+            
+            debugPrint('[PredisVideo] Poll status: $status, Video URL: ${videoUrl ?? 'not ready'}');
+            
+            if (status == 'completed' && videoUrl != null) {
+              return {
+                'status': 'completed',
+                'video_url': videoUrl,
+              };
+            } else if (status == 'failed') {
+              throw Exception('Video generation failed');
+            }
+          }
+        }
+        
+        attempts++;
+        await Future.delayed(const Duration(seconds: 10));
+      } catch (e) {
+        debugPrint('[PredisVideo] Error polling for video status: $e');
+        rethrow;
+      }
+    }
+    
+    throw Exception('Video generation timed out after ${maxAttempts * 10} seconds');
+  }
+
   Future<void> _handleError(String requestId, dynamic error) async {
     try {
-      final doc = await _firestore.collection('generation_queue').doc(requestId).get();
-      if (!doc.exists) return;
+      String errorMessage = error.toString();
+      String status = GenerationStatus.failed.value;
 
-      final request = GenerationRequest.fromMap(doc.data()!);
-      final retryCount = request.metadata?['retryCount'] as int? ?? 0;
+      // Parse error message
+      if (error is Exception) {
+        if (errorMessage.contains('API Error: 401')) {
+          errorMessage = 'Authentication failed. Please check your API key.';
+        } else if (errorMessage.contains('Rate limit exceeded')) {
+          errorMessage = 'Rate limit exceeded. Please try again later.';
+          status = GenerationStatus.pending.value; // Retry later
+        } else if (errorMessage.contains('Request timed out')) {
+          errorMessage = 'Request timed out. Please try again.';
+          status = GenerationStatus.pending.value; // Retry later
+        }
+      }
 
-      if (retryCount < maxRetries) {
-        final Map<String, dynamic> updatedMetadata = {
-          ...?request.metadata,
-          'retryCount': retryCount + 1,
-        };
+      debugPrint('[PredisVideo] Handling error for request $requestId: $errorMessage');
 
-        await _firestore.collection('generation_queue').doc(requestId).update({
-          'status': 'pending',
-          'errorMessage': 'Failed attempt ${retryCount + 1}/$maxRetries: $error',
-          'metadata': updatedMetadata,
-          'timestamp': DateTime.now(),
-        });
-      } else {
-        await _firestore.collection('generation_queue').doc(requestId).update({
-          'status': 'failed',
-          'errorMessage': 'Failed after $maxRetries attempts: $error',
-          'timestamp': DateTime.now(),
-        });
+      // Update request status
+      await _firestore.collection('generation_queue').doc(requestId).update({
+        'status': status,
+        'error': {
+          'message': errorMessage,
+          'timestamp': FieldValue.serverTimestamp(),
+        },
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      // If it's a permanent failure, refund tokens
+      if (status == GenerationStatus.failed.value) {
+        final request = await _firestore.collection('generation_queue').doc(requestId).get();
+        if (request.exists) {
+          final tokenCost = request.data()?['tokenCost'] ?? 0;
+          if (tokenCost > 0) {
+            await _refundTokens(request.data()!['userId'], tokenCost);
+          }
+        }
       }
     } catch (e) {
-      debugPrint('[PredisVideo] Error handling error: $e');
+      debugPrint('[PredisVideo] Error handling failure: $e');
     }
   }
 
@@ -653,5 +840,151 @@ class PredisVideoService {
 
   Future<void> _startQueueCleaner() async {
     Timer.periodic(queueCleanupInterval, (_) => _cleanupQueue());
+  }
+
+  Future<Map<String, dynamic>> _storeVideoInformation({
+    required String userId,
+    required String videoUrl,
+    required String prompt,
+    required String requestId,
+    required Map<String, dynamic> metadata,
+  }) async {
+    try {
+      // Generate a unique filename
+      final filename = 'video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final storagePath = 'users/$userId/videos/$filename';
+      
+      // Download video from Predis URL
+      final response = await http.get(Uri.parse(videoUrl));
+      if (response.statusCode != 200) {
+        throw Exception('Failed to download video from Predis');
+      }
+
+      // Upload to Firebase Storage
+      final storageRef = _storage.ref().child(storagePath);
+      final uploadTask = storageRef.putData(
+        response.bodyBytes,
+        SettableMetadata(contentType: 'video/mp4'),
+      );
+
+      // Get download URL after upload
+      final snapshot = await uploadTask;
+      final downloadUrl = await snapshot.ref.getDownloadURL();
+
+      // Store video information in Firestore
+      final videoDoc = await _firestore
+          .collection('users')
+          .doc(userId)
+          .collection('generated_videos')
+          .add({
+        'filename': filename,
+        'originalUrl': videoUrl,
+        'downloadUrl': downloadUrl,
+        'storagePath': storagePath,
+        'prompt': prompt,
+        'requestId': requestId,
+        'metadata': metadata,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        'size': response.contentLength,
+        'duration': metadata['duration'] ?? '30',
+        'isDownloaded': false,
+        'thumbnailUrl': '', // Will be generated
+      });
+
+      // Generate and store thumbnail
+      final thumbnailUrl = await _generateThumbnail(downloadUrl, userId, videoDoc.id);
+      await videoDoc.update({'thumbnailUrl': thumbnailUrl});
+
+      return {
+        'videoId': videoDoc.id,
+        'downloadUrl': downloadUrl,
+        'thumbnailUrl': thumbnailUrl,
+        'filename': filename,
+      };
+    } catch (e) {
+      debugPrint('[PredisVideo] Error storing video: $e');
+      rethrow;
+    }
+  }
+
+  Future<String> _generateThumbnail(String videoUrl, String userId, String videoId) async {
+    try {
+      // Generate thumbnail using video_thumbnail package or similar
+      // For now, we'll just use a placeholder
+      final thumbnailPath = 'users/$userId/thumbnails/thumb_$videoId.jpg';
+      final thumbnailRef = _storage.ref().child(thumbnailPath);
+      
+      // TODO: Implement actual thumbnail generation
+      // For now, store a placeholder
+      final placeholder = Uint8List.fromList([]);
+      await thumbnailRef.putData(placeholder, SettableMetadata(contentType: 'image/jpeg'));
+      
+      return await thumbnailRef.getDownloadURL();
+    } catch (e) {
+      debugPrint('[PredisVideo] Error generating thumbnail: $e');
+      return '';
+    }
+  }
+
+  Future<void> markVideoAsDownloaded(String videoId) async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) throw Exception('User not authenticated');
+
+      await _firestore
+          .collection('users')
+          .doc(user.uid)
+          .collection('generated_videos')
+          .doc(videoId)
+          .update({
+        'isDownloaded': true,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint('[PredisVideo] Error marking video as downloaded: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> regenerateVideo(String videoId, BuildContext context) async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) throw Exception('User not authenticated');
+
+      // Get original video data
+      final videoDoc = await _firestore
+          .collection('users')
+          .doc(user.uid)
+          .collection('generated_videos')
+          .doc(videoId)
+          .get();
+
+      if (!videoDoc.exists) throw Exception('Video not found');
+
+      final videoData = videoDoc.data()!;
+      
+      // Create new generation request with same prompt
+      final requestId = await submitRequest(
+        videoData['prompt'],
+        context,
+      );
+
+      if (requestId != null) {
+        NotificationService.showSuccess(
+          context: context,
+          title: 'Regeneration Started',
+          message: 'Your video is being regenerated',
+        );
+      }
+    } catch (e) {
+      debugPrint('[PredisVideo] Error regenerating video: $e');
+      NotificationService.showError(
+        context: context,
+        title: 'Regeneration Failed',
+        message: 'Failed to regenerate video',
+        technicalDetails: e.toString(),
+      );
+    }
   }
 } 

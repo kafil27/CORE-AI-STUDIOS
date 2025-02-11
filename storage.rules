@@ -21,18 +21,23 @@ service firebase.storage {
     function isValidFileSize() {
       return request.resource.size < 100 * 1024 * 1024; // 100MB limit
     }
-    
-    function isPublicFile(filePath) {
-      return exists(/databases/(default)/documents/social_feed/$(filePath)) &&
-             get(/databases/(default)/documents/social_feed/$(filePath)).data.isPublic == true;
+
+    // User videos and thumbnails
+    match /users/{userId}/videos/{fileName} {
+      allow read: if isAuthenticated() && isOwner(userId);
+      allow write: if isAuthenticated() && isOwner(userId);
+      allow delete: if isAuthenticated() && isOwner(userId);
+    }
+
+    match /users/{userId}/thumbnails/{fileName} {
+      allow read: if isAuthenticated() && isOwner(userId);
+      allow write: if isAuthenticated() && isOwner(userId);
+      allow delete: if isAuthenticated() && isOwner(userId);
     }
 
     // Generated content
     match /generated/{userId}/{type}/{fileName} {
-      allow read: if isAuthenticated() && (
-        isOwner(userId) || 
-        isPublicFile(fileName)
-      );
+      allow read: if isAuthenticated() && isOwner(userId);
       allow write: if isAuthenticated() && 
                   isOwner(userId) && 
                   hasValidContentType() && 
