@@ -7,12 +7,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../config/ai_service_config.dart';
 import '../models/generation_request.dart';
 import '../models/generation_type.dart';
-import '../ui/widgets/custom_error_popup.dart';
 import 'notification_service.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_storage/firebase_storage.dart';
-import 'package:path/path.dart' as path;
 import 'dart:typed_data';
+import 'token_service.dart';
 
 enum PredisVideoError {
   invalidApiKey,
@@ -316,6 +315,11 @@ class PredisVideoService {
       final user = _auth.currentUser;
       if (user == null) throw Exception('User not authenticated');
 
+      // Check token balance first
+      final tokenCost = GenerationType.video.defaultTokenCost;
+      final tokenService = TokenService(_firestore, _auth);
+      await tokenService.checkTokenBalance(tokenCost);
+
       // Cleanup old requests first
       await _cleanupQueue();
 
@@ -335,6 +339,7 @@ class PredisVideoService {
         'attempts': 0,
         'maxAttempts': 3,
         'priority': 1,
+        'tokenCost': tokenCost,
       };
 
       final request = GenerationRequest(
@@ -344,7 +349,7 @@ class PredisVideoService {
         prompt: prompt,
         status: 'queued',
         timestamp: DateTime.now(),
-        tokenCost: 100,
+        tokenCost: tokenCost,
         progress: 0,
         metadata: baseMetadata,
       );
@@ -654,15 +659,19 @@ class PredisVideoService {
         'Accept': 'application/json',
       });
 
-      // Add form fields
+      // Add form fields with optimized settings for shorter videos and lower credit usage
       httpRequest.fields.addAll({
         'brand_id': brandId,
         'text': request.prompt,
         'media_type': 'video',
-        'video_duration': 'long',
+        'video_duration': 'short',  // Changed from 'long' to 'short'
+        'video_type': 'short_form', // Added to specify short-form content
+        'duration': '15',           // Set to 15 seconds for optimal credit usage
+        'quality': 'standard',      // Use standard quality instead of high
         'input_language': 'english',
         'output_language': 'english',
         'color_palette_type': 'ai_suggested',
+        'optimize_credits': 'true', // Added to request credit optimization
       });
 
       debugPrint('[PredisVideo] Sending request with fields: ${httpRequest.fields}');
@@ -822,8 +831,10 @@ class PredisVideoService {
       'brand_id': _config.defaultParams['brand_id'],
       'input_language': 'english',
       'output_language': 'english',
-      'video_type': 'short',
-      'duration': '30',
+      'video_type': 'short_form',
+      'duration': '15',
+      'quality': 'standard',
+      'optimize_credits': 'true',
       'api_key': _config.apiKey,
     };
 
@@ -985,6 +996,115 @@ class PredisVideoService {
         message: 'Failed to regenerate video',
         technicalDetails: e.toString(),
       );
+    }
+  }
+
+  Future<void> _updateRequestStatus(String requestId, String status, {
+    String? errorMessage,
+    Map<String, dynamic>? result,
+    double? progress,
+  }) async {
+    final requestRef = _firestore.collection('generation_queue').doc(requestId);
+    final request = await requestRef.get();
+    
+    if (!request.exists) return;
+    
+    final updates = {
+      'status': status,
+      'updatedAt': FieldValue.serverTimestamp(),
+      if (errorMessage != null) 'errorMessage': errorMessage,
+      if (result != null) 'result': result,
+      if (progress != null) 'progress': progress,
+    };
+
+    await requestRef.update(updates);
+
+    // If the request is completed successfully, deduct tokens
+    if (status == 'completed') {
+      final data = request.data()!;
+      final userId = data['userId'] as String;
+      final tokenCost = data['tokenCost'] as int;
+      final prompt = data['prompt'] as String;
+      
+      final tokenService = TokenService(_firestore, _auth);
+      await tokenService.deductTokens(
+        tokenCost,
+        'Video Generation',
+        prompt: prompt,
+        outputUrl: result?['video_url'] ?? '',
+        generatedFileName: result?['filename'] ?? '',
+        serviceSpecificData: data['metadata'] as Map<String, dynamic>?,
+      );
+
+      // Update usage history
+      await _firestore.collection('users').doc(userId).collection('usage_history').add({
+        'type': 'video_generation',
+        'timestamp': FieldValue.serverTimestamp(),
+        'tokenCost': tokenCost,
+        'prompt': prompt,
+        'result': result,
+        'requestId': requestId,
+      });
+    }
+  }
+
+  Future<void> addToCollection(String requestId, String videoUrl, String prompt, Map<String, dynamic> metadata) async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) throw Exception('User not authenticated');
+
+      // Create video document in user's collection
+      final videoDoc = await _firestore
+          .collection('users')
+          .doc(user.uid)
+          .collection('video_collection')
+          .doc(requestId)
+          .set({
+        'videoUrl': videoUrl,
+        'prompt': prompt,
+        'metadata': metadata,
+        'addedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      // Update request to mark as added to collection
+      await _firestore
+          .collection('generation_queue')
+          .doc(requestId)
+          .update({
+        'addedToCollection': true,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint('[PredisVideo] Error adding to collection: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> removeFromCollection(String requestId) async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) throw Exception('User not authenticated');
+
+      // Remove from collection
+      await _firestore
+          .collection('users')
+          .doc(user.uid)
+          .collection('video_collection')
+          .doc(requestId)
+          .delete();
+
+      // Update request to mark as removed from collection
+      await _firestore
+          .collection('generation_queue')
+          .doc(requestId)
+          .update({
+        'addedToCollection': false,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint('[PredisVideo] Error removing from collection: $e');
+      rethrow;
     }
   }
 } 

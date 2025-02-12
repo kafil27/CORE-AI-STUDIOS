@@ -27,6 +27,11 @@ class PredisAIConfig extends AIServiceConfig {
     'input_language': 'english',
     'output_language': 'english',
     'color_palette_type': 'ai_suggested',
+    'video_type': 'short_form',
+    'video_duration': 'short',
+    'duration': '15',
+    'quality': 'standard',
+    'optimize_credits': 'true',
   };
 }
 

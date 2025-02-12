@@ -1,40 +1,16 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../services/image_generation_service.dart';
-import '../../../services/token_balance_service.dart';
-import '../../widgets/loading_overlay.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import '../../../services/notification_service.dart';
 import '../../widgets/ai_prompt_input.dart';
-import '../../widgets/tips_section.dart';
-import '../../../providers/token_provider.dart';
-import '../../../services/generation_request_service.dart';
 import '../../../models/generation_request.dart';
 import '../../../models/generation_type.dart';
 import '../../widgets/generation_request_card.dart';
-import '../../../services/token_service.dart';
-import '../../../providers/token_provider.dart';
-import 'dart:io';
-import 'dart:convert';
-import 'package:url_launcher/url_launcher.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as path;
-import 'package:flutter/services.dart';
-import 'package:open_file/open_file.dart';
-import 'dart:math';
-import 'package:elegant_notification/elegant_notification.dart';
-import 'package:elegant_notification/resources/arrays.dart';
-import 'package:flutter/rendering.dart';
-import 'dart:ui';
-import 'package:shared_preferences/shared_preferences.dart';
-import '../../../services/notification_service.dart';
-import '../../../services/generation_request_service.dart';
-import '../../../models/generation_request.dart';
-import '../../widgets/ai_prompt_input.dart';
+
 import '../../widgets/tips_section.dart';
-import '../../widgets/generation_request_card.dart';
+import '../../../services/generation_request_service.dart';
+import '../../../services/image_generation_service.dart';
 import '../../widgets/loading_overlay.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 final imageServiceProvider = Provider((ref) => ImageGenerationService());
 final generationRequestServiceProvider = Provider((ref) => GenerationRequestService());
@@ -90,6 +66,14 @@ class _ImageAIScreenState extends ConsumerState<ImageAIScreen> {
     if (requestId != null) {
       setState(() => _currentRequestId = requestId);
     }
+  }
+
+  Widget _buildGenerationRequestCard(GenerationRequest request) {
+    return GenerationRequestCard(
+      request: request,
+      isExpanded: true,
+      showProgress: true,
+    );
   }
 
   @override
@@ -182,17 +166,18 @@ class _ImageAIScreenState extends ConsumerState<ImageAIScreen> {
                         const SizedBox(height: 16),
                         currentRequest.when(
                           data: (request) => request != null
-                              ? GenerationRequestCard(
-                                  request: request,
-                                  onCancel: () => _requestService.cancelRequest(
-                                    request.id,
-                                    context,
+                              ? Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                                  margin: const EdgeInsets.only(bottom: 16),
+                                  width: double.infinity,
+                                  child: GenerationRequestCard(
+                                    request: request,
+                                    isExpanded: true,
+                                    onRetry: () => _requestService.retryRequest(
+                                      request.id,
+                                      context,
+                                    ),
                                   ),
-                                  onRetry: () => _requestService.retryRequest(
-                                    request.id,
-                                    context,
-                                  ),
-                                  isExpanded: true,
                                 )
                               : const SizedBox.shrink(),
                           loading: () => const Center(
@@ -230,20 +215,26 @@ class _ImageAIScreenState extends ConsumerState<ImageAIScreen> {
                               ),
                               const SizedBox(height: 16),
                               ...imageRequests.map((request) =>
-                                GenerationRequestCard(
-                                  request: request,
-                                  onRetry: request.canRetry
-                                      ? () => _requestService.retryRequest(
-                                          request.id,
-                                          context,
-                                        )
-                                      : null,
-                                  onCancel: request.canCancel
-                                      ? () => _requestService.cancelRequest(
-                                          request.id,
-                                          context,
-                                        )
-                                      : null,
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                                  margin: const EdgeInsets.only(bottom: 16),
+                                  width: double.infinity,
+                                  child: GenerationRequestCard(
+                                    request: request,
+                                    isExpanded: true,
+                                    onRetry: request.canRetry
+                                        ? () => _requestService.retryRequest(
+                                            request.id,
+                                            context,
+                                          )
+                                        : null,
+                                    onCancel: request.canCancel
+                                        ? () => _requestService.cancelRequest(
+                                            request.id,
+                                            context,
+                                          )
+                                        : null,
+                                  ),
                                 ),
                               ),
                             ],
