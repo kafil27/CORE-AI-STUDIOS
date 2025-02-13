@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:loading_animation_widget/loading_animation_widget.dart';
-import 'package:video_thumbnail/video_thumbnail.dart';
+import 'package:video_thumbnail_imageview/video_thumbnail_imageview.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -13,11 +12,11 @@ class GenerationRequestCard extends StatefulWidget {
   final Function(String)? onRetry;
 
   const GenerationRequestCard({
-    Key? key,
+    super.key,
     required this.request,
     this.isExpanded = false,
     this.onRetry,
-  }) : super(key: key);
+  });
 
   @override
   State<GenerationRequestCard> createState() => _GenerationRequestCardState();
@@ -26,44 +25,25 @@ class GenerationRequestCard extends StatefulWidget {
 class _GenerationRequestCardState extends State<GenerationRequestCard> {
   double? _downloadProgress;
 
-  Future<Widget> _buildVideoThumbnail(String videoUrl) async {
-    try {
-      final uint8List = await VideoThumbnail.thumbnailData(
-        video: videoUrl,
-        imageFormat: ImageFormat.JPEG,
-        maxWidth: 128,
-        quality: 25,
-      );
-      
-      if (uint8List == null) {
-        return const Icon(Icons.video_file, size: 48);
-      }
-      
-      return Image.memory(uint8List, fit: BoxFit.cover);
-    } catch (e) {
-      return const Icon(Icons.video_file, size: 48);
-    }
-  }
-
   Widget _buildThumbnailSection(String videoUrl) {
-    return FutureBuilder<Widget>(
-      future: _buildVideoThumbnail(videoUrl),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return Center(
-            child: LoadingAnimationWidget.staggeredDotsWave(
-              color: Theme.of(context).primaryColor,
-              size: 40,
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: SizedBox(
+        height: 180,
+        width: double.infinity,
+        child: VTImageView(
+          videoUrl: videoUrl,
+          assetPlaceHolder: 'assets/bot_image.png',
+          errorBuilder: (context, error, stack) => Container(
+            color: Colors.grey[900],
+            child: const Icon(
+              Icons.video_file,
+              size: 48,
+              color: Colors.white54,
             ),
-          );
-        }
-        
-        if (snapshot.hasError || !snapshot.hasData) {
-          return const Icon(Icons.video_file, size: 48);
-        }
-        
-        return snapshot.data!;
-      },
+          ),
+        ),
+      ),
     );
   }
 

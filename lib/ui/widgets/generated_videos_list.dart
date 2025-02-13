@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../../models/generation_request.dart';
 import '../../services/predis_video_service.dart';
 import '../../config/ai_service_config.dart';
 import 'generated_video_card.dart';

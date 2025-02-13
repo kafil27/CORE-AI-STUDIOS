@@ -67,7 +67,7 @@ dependencies:
   video_player: ^2.8.2
   cached_network_image: ^3.3.1
   gal: ^2.3.1
-  video_thumbnail: ^0.5.3
+  video_thumbnail_imageview: ^0.0.6
 
 dev_dependencies:
   flutter_test:

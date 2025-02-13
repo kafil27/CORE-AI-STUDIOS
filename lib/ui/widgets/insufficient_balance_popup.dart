@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:lottie/lottie.dart';
 
 class InsufficientBalancePopup extends StatelessWidget {
   final int requiredTokens;

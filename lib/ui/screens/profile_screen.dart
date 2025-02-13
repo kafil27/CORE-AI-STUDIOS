@@ -6,7 +6,6 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:razorpay_flutter/razorpay_flutter.dart';
-import 'package:core_ai_studios/services/firestore_service.dart';
 import 'package:core_ai_studios/controllers/auth_controller.dart';
 
 class ProfileScreen extends ConsumerStatefulWidget {

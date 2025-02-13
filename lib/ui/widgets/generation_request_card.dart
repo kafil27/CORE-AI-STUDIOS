@@ -1,14 +1,12 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gal/gal.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
-import 'package:video_player/video_player.dart';
-import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:loading_animation_widget/loading_animation_widget.dart';
-import 'dart:io';
+import 'package:video_thumbnail_imageview/video_thumbnail_imageview.dart';
 import '../../models/generation_request.dart';
 import '../../models/generation_type.dart';
 import '../../services/downloads_service.dart';
@@ -26,7 +24,7 @@ class GenerationRequestCard extends ConsumerStatefulWidget {
   final Function(bool)? onCollectionToggle;
 
   const GenerationRequestCard({
-    Key? key,
+    super.key,
     required this.request,
     this.isExpanded = false,
     this.onRetry,
@@ -34,10 +32,10 @@ class GenerationRequestCard extends ConsumerStatefulWidget {
     this.onCancel,
     this.isAddedToCollection = false,
     this.onCollectionToggle,
-  }) : super(key: key);
+  });
 
   @override
-  _GenerationRequestCardState createState() => _GenerationRequestCardState();
+  ConsumerState<GenerationRequestCard> createState() => _GenerationRequestCardState();
 }
 
 class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> with SingleTickerProviderStateMixin {
@@ -88,380 +86,141 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
   double _getInitialProgress() {
     final status = widget.request.status.toLowerCase();
     if (status == 'pending') return 0.0;
-    if (status == 'processing') return 0.2;
+    if (status == 'processing') {
+      return (widget.request.progress ?? 0) / 100;
+    }
     if (status == 'completed') return 1.0;
     return 0.0;
   }
 
   double _getTargetProgress() {
     final status = widget.request.status.toLowerCase();
-    if (status == 'pending') return 0.2;
+    if (status == 'pending') return 0.0;
     if (status == 'processing') {
-      final progress = widget.request.progress ?? 0.0;
-      return 0.2 + (progress / 100.0 * 0.6); // Scale between 20% and 80%
+      return (widget.request.progress ?? 0) / 100;
     }
     if (status == 'completed') return 1.0;
     return 0.0;
   }
 
-  String _getStatusText() {
-    switch (widget.request.status.toLowerCase()) {
-      case 'pending':
-        return 'Initializing AI...';
-      case 'processing':
-        return 'Creating Your Video';
-      case 'completed':
-        return 'Video Ready!';
-      case 'failed':
-        return 'Generation Failed';
-      default:
-        return 'Processing...';
-    }
-  }
-
-  IconData _getStatusIcon() {
-    switch (widget.request.status.toLowerCase()) {
-      case 'pending':
-        return Icons.hourglass_empty;
-      case 'processing':
-        return Icons.movie_creation;
-      case 'completed':
-        return Icons.check_circle;
-      case 'failed':
-        return Icons.error_outline;
-      default:
-        return Icons.pending;
-    }
+  String _getStatusMessage() {
+    final status = widget.request.status.toLowerCase();
+    if (status == 'pending') return 'Initializing...';
+    if (status == 'processing') return 'Generating your masterpiece...';
+    if (status == 'completed') return 'Generation completed!';
+    if (status == 'failed') return 'Generation failed';
+    return 'Processing...';
   }
 
   Color _getStatusColor() {
-    switch (widget.request.status.toLowerCase()) {
-      case 'pending':
-        return Colors.orange.withOpacity(0.8);
-      case 'processing':
-        return Colors.blue.withOpacity(0.8);
-      case 'completed':
-        return Colors.green.withOpacity(0.8);
-      case 'failed':
-        return Colors.red.withOpacity(0.8);
-      default:
-        return Colors.grey.withOpacity(0.8);
-    }
+    final status = widget.request.status.toLowerCase();
+    if (status == 'pending') return Colors.amber;
+    if (status == 'processing') return Colors.blue;
+    if (status == 'completed') return Colors.green;
+    if (status == 'failed') return Colors.red;
+    return Colors.grey;
   }
 
-  Widget _buildProgressSection() {
-    if (!widget.showProgress) return const SizedBox.shrink();
-
-    return AnimatedBuilder(
-      animation: _progressAnimation,
-      builder: (context, child) {
-        return Container(
-          margin: const EdgeInsets.symmetric(vertical: 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    _getStatusText(),
-                    style: TextStyle(
-                      color: _getStatusColor(),
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                    ),
-                  ),
-                  Text(
-                    '${(_progressAnimation.value * 100).toInt()}%',
-                    style: TextStyle(
-                      color: _getStatusColor(),
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: LinearProgressIndicator(
-                  value: _progressAnimation.value,
-                  backgroundColor: Colors.grey[800],
-                  valueColor: AlwaysStoppedAnimation<Color>(_getStatusColor()),
-                  minHeight: 4,
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildOutputSection() {
-    if (widget.request.status.toLowerCase() != 'completed') {
-      return const SizedBox.shrink();
+  Widget _buildStatusIcon() {
+    final status = widget.request.status.toLowerCase();
+    if (status == 'pending') {
+      return LoadingAnimationWidget.staggeredDotsWave(
+        color: Colors.amber,
+        size: 24,
+      );
     }
-
-    final videoUrl = widget.request.result is String 
-        ? widget.request.result as String
-        : (widget.request.result as Map<String, dynamic>?)?['video_url'] as String?;
-    
-    if (videoUrl == null) return const SizedBox.shrink();
-
-    return Container(
-      margin: const EdgeInsets.only(top: 16),
-      decoration: BoxDecoration(
-        color: Colors.grey[850],
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Colors.grey[800]!,
-          width: 1,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Video Thumbnail Section
-          ClipRRect(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
-            child: AspectRatio(
-              aspectRatio: 16 / 9,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  // Video Thumbnail
-                  _buildThumbnailSection(videoUrl),
-                  // Play Button Overlay
-                  Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () => _previewVideo(videoUrl),
-                      child: Center(
-                        child: Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Colors.black38,
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: Colors.white24,
-                              width: 2,
-                            ),
-                          ),
-                          child: const Icon(
-                            Icons.play_arrow_rounded,
-                            color: Colors.white,
-                            size: 32,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          // Info Section
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Generated Video',
-                          style: TextStyle(
-                            color: Colors.grey[300],
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Generated ${_getTimeAgo(widget.request.timestamp)}',
-                          style: TextStyle(
-                            color: Colors.grey[500],
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: Colors.green.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: Colors.green.withOpacity(0.2),
-                          width: 1,
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.token,
-                            size: 16,
-                            color: Colors.green[400],
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            '${widget.request.tokenCost} tokens',
-                            style: TextStyle(
-                              color: Colors.green[400],
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                // Action Buttons
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    _buildAnimatedActionButton(
-                      icon: _isDownloading ? Icons.downloading_rounded : Icons.download_rounded,
-                      label: _isDownloading ? 'Downloading...' : 'Download',
-                      onPressed: _isDownloading ? null : () => _downloadVideo(videoUrl),
-                      color: Colors.blue[400]!,
-                      isLoading: _isDownloading,
-                      progress: _downloadProgress,
-                    ),
-                    _buildAnimatedActionButton(
-                      icon: Icons.open_in_browser_rounded,
-                      label: 'Open in Browser',
-                      onPressed: () => _openInBrowser(videoUrl),
-                      color: Colors.green[400]!,
-                    ),
-                    _buildAnimatedActionButton(
-                      icon: widget.isAddedToCollection 
-                          ? Icons.bookmark_rounded 
-                          : Icons.bookmark_outline_rounded,
-                      label: widget.isAddedToCollection ? 'Saved' : 'Add to Collection',
-                      onPressed: () => widget.onCollectionToggle?.call(!widget.isAddedToCollection),
-                      color: widget.isAddedToCollection ? Colors.amber[400]! : Colors.grey[400]!,
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
+    if (status == 'processing') {
+      return LoadingAnimationWidget.inkDrop(
+        color: Colors.blue,
+        size: 24,
+      );
+    }
+    if (status == 'completed') {
+      return const Icon(Icons.check_circle, color: Colors.green, size: 24);
+    }
+    if (status == 'failed') {
+      return const Icon(Icons.error, color: Colors.red, size: 24);
+    }
+    return const Icon(Icons.hourglass_empty, color: Colors.grey, size: 24);
   }
 
   Widget _buildThumbnailSection(String videoUrl) {
-    return FutureBuilder<Widget>(
-      future: _buildVideoThumbnail(videoUrl),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return Center(
-            child: LoadingAnimationWidget.staggeredDotsWave(
-              color: Theme.of(context).primaryColor,
-              size: 40,
-            ),
-          );
-        }
-        
-        if (snapshot.hasError || !snapshot.hasData) {
-          return const Icon(Icons.video_file, size: 48);
-        }
-        
-        return snapshot.data!;
-      },
-    );
-  }
-
-  Future<Widget> _buildVideoThumbnail(String videoUrl) async {
-    try {
-      final uint8List = await VideoThumbnail.thumbnailData(
-        video: videoUrl,
-        imageFormat: ImageFormat.JPEG,
-        maxWidth: 128,
-        quality: 25,
-      );
-      
-      if (uint8List == null) {
-        return const Icon(Icons.video_file, size: 48);
-      }
-      
-      return Image.memory(uint8List, fit: BoxFit.cover);
-    } catch (e) {
-      return const Icon(Icons.video_file, size: 48);
-    }
-  }
-
-  Widget _buildAnimatedActionButton({
-    required IconData icon,
-    required String label,
-    required VoidCallback? onPressed,
-    required Color color,
-    bool isLoading = false,
-    double progress = 0.0,
-  }) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onPressed,
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Stack(
-                alignment: Alignment.center,
-                children: [
-                  if (isLoading)
-                    SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(
-                        value: progress,
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(color),
-                        backgroundColor: color.withOpacity(0.2),
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        height: 200,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: Colors.grey[900],
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            VTImageView(
+              videoUrl: videoUrl,
+              assetPlaceHolder: 'assets/bot_image.png',
+              errorBuilder: (context, error, stack) => Container(
+                color: Colors.grey[900],
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.video_file,
+                      size: 48,
+                      color: Colors.grey[700],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Video thumbnail not available',
+                      style: TextStyle(
+                        color: Colors.grey[600],
+                        fontSize: 12,
                       ),
                     ),
-                  AnimatedOpacity(
-                    opacity: isLoading ? 0.5 : 1.0,
-                    duration: const Duration(milliseconds: 200),
-                    child: Icon(
-                      icon,
-                      color: color,
-                      size: 24,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                label,
-                style: TextStyle(
-                  color: color,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
+                  ],
                 ),
               ),
-            ],
-          ),
+            ),
+            // Play button overlay
+            if (widget.request.status.toLowerCase() == 'completed')
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () => launchUrl(Uri.parse(videoUrl)),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.black.withOpacity(0.3),
+                          Colors.black.withOpacity(0.7),
+                        ],
+                      ),
+                    ),
+                    child: Center(
+                      child: Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.black38,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Colors.white24,
+                            width: 2,
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.play_arrow_rounded,
+                          color: Colors.white,
+                          size: 32,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -476,171 +235,210 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
         _downloadProgress = 0;
       });
 
-      final request = await http.Client().send(
-        http.Request('GET', Uri.parse(url))..headers['Accept'] = 'video/mp4',
-      );
-
-      if (request.statusCode != 200) {
-        throw 'Failed to download video: ${request.statusCode}';
+      final status = await Permission.storage.request();
+      if (!status.isGranted) {
+        throw Exception('Storage permission denied');
       }
 
-      final contentLength = request.contentLength ?? 0;
-      int received = 0;
+      final response = await http.Client().send(http.Request('GET', Uri.parse(url)));
+      final contentLength = response.contentLength ?? 0;
+      int downloaded = 0;
+      final bytes = <int>[];
 
-      final appDir = await getApplicationDocumentsDirectory();
-      final fileName = 'AI_Video_${DateTime.now().millisecondsSinceEpoch}.mp4';
-      final file = File('${appDir.path}/$fileName');
-      final sink = file.openWrite();
+      await for (final chunk in response.stream) {
+        bytes.addAll(chunk);
+        downloaded += chunk.length;
+        setState(() {
+          _downloadProgress = contentLength > 0 ? downloaded / contentLength : 0;
+        });
+      }
 
-      await request.stream.listen(
-        (List<int> chunk) {
-          sink.add(chunk);
-          received += chunk.length;
-          setState(() {
-            _downloadProgress = contentLength > 0 ? received / contentLength : 0;
-          });
-        },
-        onDone: () async {
-          await sink.close();
-          if (!mounted) return;
-          
-          NotificationService.showSuccess(
-            context: context,
-            title: 'Download Complete',
-            message: 'Video saved to downloads',
-          );
+      final fileName = 'video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final file = await DownloadsService.getLocalFile(fileName, ContentType.video);
+      await file.writeAsBytes(bytes);
 
-          setState(() {
-            _isDownloading = false;
-            _downloadProgress = 1.0;
-          });
-        },
-        onError: (error) {
-          sink.close();
-          throw error;
-        },
-        cancelOnError: true,
-      ).asFuture(); // Convert StreamSubscription to Future
+      // Save to gallery
+      await Gal.putVideo(file.path);
 
-    } catch (e) {
-      setState(() {
-        _isDownloading = false;
-        _downloadProgress = 0;
-      });
-
-      if (!mounted) return;
-      NotificationService.showError(
-        context: context,
-        title: 'Download Error',
-        message: 'Failed to download video',
-        technicalDetails: e.toString(),
-      );
-    }
-  }
-
-  Future<void> _previewVideo(String url) async {
-    try {
-      final uri = Uri.parse(url);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri);
-      } else {
-        throw 'Could not launch video preview';
+      if (mounted) {
+        NotificationService.showSuccess(
+          context: context,
+          title: 'Success',
+          message: 'Video saved to gallery',
+        );
       }
     } catch (e) {
-      if (!mounted) return;
-      NotificationService.showError(
-        context: context,
-        title: 'Preview Error',
-        message: 'Could not preview the video',
-        technicalDetails: e.toString(),
-      );
-    }
-  }
-
-  Future<void> _openInBrowser(String url) async {
-    try {
-      final uri = Uri.parse(url);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      } else {
-        throw 'Could not launch video in browser';
+      if (mounted) {
+        NotificationService.showError(
+          context: context,
+          title: 'Download Error',
+          message: 'Failed to download video',
+          technicalDetails: e.toString(),
+        );
       }
-    } catch (e) {
-      if (!mounted) return;
-      NotificationService.showError(
-        context: context,
-        title: 'Browser Error',
-        message: 'Could not open the video in browser',
-        technicalDetails: e.toString(),
-      );
-    }
-  }
-
-  String _getTimeAgo(DateTime timestamp) {
-    final now = DateTime.now();
-    final difference = now.difference(timestamp);
-
-    if (difference.inDays > 0) {
-      return '${difference.inDays}d ago';
-    } else if (difference.inHours > 0) {
-      return '${difference.inHours}h ago';
-    } else if (difference.inMinutes > 0) {
-      return '${difference.inMinutes}m ago';
-    } else {
-      return 'just now';
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isDownloading = false;
+          _downloadProgress = 0;
+        });
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: MediaQuery.of(context).size.width * 0.9,
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.grey[900],
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: Colors.grey[800]!,
-          width: 1,
-        ),
+    final videoUrl = widget.request.outputUrl ?? widget.request.storageUrl;
+    final isCompleted = widget.request.status.toLowerCase() == 'completed';
+    final status = widget.request.status.toLowerCase();
+    
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 8.0),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              Icon(
-                _getStatusIcon(),
-                color: _getStatusColor(),
-                size: 20,
+          // Status Section
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.grey[900],
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(16),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  widget.request.prompt,
-                  style: TextStyle(
-                    color: Colors.grey[300],
-                    fontSize: 14,
+            ),
+            child: Row(
+              children: [
+                _buildStatusIcon(),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    status == 'completed' ? 'Generation completed!' : 'Processing...',
+                    style: TextStyle(
+                      color: _getStatusColor(),
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
                 ),
-              ),
-              if (widget.onCancel != null &&
-                  widget.request.status.toLowerCase() == 'pending')
-                IconButton(
-                  icon: Icon(
-                    Icons.close_rounded,
+                if (widget.onCancel != null && !isCompleted)
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: widget.onCancel,
                     color: Colors.grey[400],
-                    size: 20,
                   ),
-                  onPressed: widget.onCancel,
-                ),
-            ],
+              ],
+            ),
           ),
-          _buildProgressSection(),
-          _buildOutputSection(),
+
+          // Prompt Section
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              widget.request.prompt,
+              style: const TextStyle(fontSize: 16),
+            ),
+          ),
+
+          // Progress Bar Section (if not completed)
+          if (widget.showProgress && !isCompleted)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: GenerationProgressBar(
+                progress: _progressAnimation.value,
+                status: widget.request.status,
+                showLabel: true,
+                startColor: _getStatusColor(),
+              ),
+            ),
+
+          // Generation Complete Actions
+          if (isCompleted)
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Row(
+                      children: [
+                        if (widget.onCollectionToggle != null)
+                          IconButton(
+                            icon: Icon(
+                              widget.isAddedToCollection
+                                  ? Icons.bookmark
+                                  : Icons.bookmark_border,
+                              color: widget.isAddedToCollection ? Colors.amber : Colors.grey[400],
+                            ),
+                            onPressed: () => widget.onCollectionToggle?.call(!widget.isAddedToCollection),
+                          ),
+                        IconButton(
+                          icon: Icon(Icons.download, color: Colors.grey[400]),
+                          onPressed: videoUrl != null ? () => _downloadVideo(videoUrl) : null,
+                        ),
+                        IconButton(
+                          icon: Icon(Icons.open_in_browser, color: Colors.grey[400]),
+                          onPressed: videoUrl != null ? () => launchUrl(Uri.parse(videoUrl)) : null,
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Start New Generation Button
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.black,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: Theme.of(context).primaryColor.withOpacity(0.3),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Theme.of(context).primaryColor.withOpacity(0.1),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: IconButton(
+                      icon: Icon(
+                        Icons.add_circle_outline,
+                        color: Theme.of(context).primaryColor,
+                      ),
+                      onPressed: () {
+                        // Handle new generation
+                      },
+                      tooltip: 'Start New Generation',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+          // Error/Retry Section
+          if (widget.request.errorMessage != null && widget.onRetry != null)
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Error: ${widget.request.errorMessage}',
+                    style: TextStyle(color: Colors.red[400]),
+                  ),
+                  const SizedBox(height: 8),
+                  ElevatedButton.icon(
+                    onPressed: widget.onRetry,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Retry Generation'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red[400]?.withOpacity(0.2),
+                      foregroundColor: Colors.red[400],
+                    ),
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );
