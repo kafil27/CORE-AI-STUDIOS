@@ -108,8 +108,7 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
                   onCollectionToggle: _handleCollectionToggle,
                 ),
               ),
-            if (!_isGenerating && _currentRequest?.status.toLowerCase() == 'completed')
-              _buildNewGenerationButton(),
+      
           ],
         ),
       ),

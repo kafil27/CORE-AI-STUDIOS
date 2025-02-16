@@ -57,13 +57,6 @@ class VideoGenerationService {
     required BuildContext context,
   }) async {
     if (predisApiKey.isEmpty || predisBrandId.isEmpty) {
-      NotificationService.showError(
-        context: context,
-        title: 'Configuration Error',
-        message: 'API configuration is missing',
-        errorType: ErrorType.apiNotFound,
-        technicalDetails: 'Predis API key or Brand ID not found in environment variables',
-      );
       throw VideoServiceException(
         VideoServiceError.apiKeyMissing,
         'API configuration missing',
@@ -96,12 +89,6 @@ class VideoGenerationService {
       ).timeout(
         Duration(minutes: 2),
         onTimeout: () {
-          NotificationService.showError(
-            context: context,
-            title: 'Request Timeout',
-            message: 'The request took too long to complete. Please try again.',
-            errorType: ErrorType.serviceError,
-          );
           throw VideoServiceException(
             VideoServiceError.timeoutError,
             'Request timed out. Please try again.',
@@ -115,29 +102,17 @@ class VideoGenerationService {
 
       if (response.statusCode == 200) {
         final responseData = jsonDecode(response.body);
-        NotificationService.showSuccess(
-          context: context,
-          title: 'Video Generation Started',
-          message: 'Your video is being generated. This may take a few minutes.',
-          playSound: true,
-        );
         return {
           'post_id': responseData['post_ids']?[0] ?? responseData['post_id'],
           'status': responseData['post_status'] ?? 'processing',
         };
       } else {
-        _handlePredisError(response.statusCode, jsonDecode(response.body), context);
+        _handlePredisError(response.statusCode, jsonDecode(response.body));
       }
     } catch (e) {
       if (e is VideoServiceException) rethrow;
       
       if (e.toString().contains('SocketException')) {
-        NotificationService.showError(
-          context: context,
-          title: 'Network Error',
-          message: 'Please check your internet connection and try again.',
-          errorType: ErrorType.networkError,
-        );
         throw VideoServiceException(
           VideoServiceError.networkError,
           'Network connection error',
@@ -145,13 +120,6 @@ class VideoGenerationService {
         );
       }
       
-      NotificationService.showError(
-        context: context,
-        title: 'Unexpected Error',
-        message: 'An unexpected error occurred. Please try again.',
-        errorType: ErrorType.otherError,
-        technicalDetails: e.toString(),
-      );
       throw VideoServiceException(
         VideoServiceError.unknownError,
         'An unexpected error occurred',
@@ -197,15 +165,6 @@ class VideoGenerationService {
           final videoUrl = post['generated_media']?[0]?['url'];
           final thumbUrl = post['generated_media']?[0]?['thumb_url'];
           final caption = post['caption'];
-          
-          if (post['status'] == STATUS_COMPLETED && videoUrl != null) {
-            NotificationService.showSuccess(
-              context: context,
-              title: 'Video Generated',
-              message: 'Your video is ready!',
-              playSound: true,
-            );
-          }
           
           return {
             'status': post['status'],
@@ -304,7 +263,7 @@ class VideoGenerationService {
         };
       } else {
         final errorData = jsonDecode(response.body);
-        _handlePredisError(response.statusCode, errorData, context);
+        _handlePredisError(response.statusCode, errorData);
       }
     } catch (e) {
       if (e is VideoServiceException) rethrow;
@@ -455,7 +414,7 @@ class VideoGenerationService {
     }
   }
 
-  void _handlePredisError(int statusCode, Map<String, dynamic> errorData, BuildContext context) {
+  void _handlePredisError(int statusCode, Map<String, dynamic> errorData) {
     print('Handling error - Status code: $statusCode');
     print('Error data: $errorData');
     
@@ -468,89 +427,45 @@ class VideoGenerationService {
         if (limits != null) {
           final used = limits['api_request_in_last_one_hour'];
           final allowed = limits['total_requests_allowed_per_hour'];
-          NotificationService.showError(
-            context: context,
-            title: 'Rate Limit Exceeded',
-            message: 'Too many requests. Please try again later.',
-            errorType: ErrorType.serviceError,
-            technicalDetails: 'Used: $used, Allowed per hour: $allowed',
-          );
           throw VideoServiceException(
             VideoServiceError.rateLimitExceeded,
             'Too many requests. Please try again later.',
             technicalDetails: 'Used: $used, Allowed per hour: $allowed',
           );
         } else {
-          NotificationService.showError(
-            context: context,
-            title: 'Rate Limit Exceeded',
-            message: 'Too many requests. Please try again later.',
-            errorType: ErrorType.serviceError,
-          );
           throw VideoServiceException(
             VideoServiceError.rateLimitExceeded,
             'Too many requests. Please try again later.',
             technicalDetails: errorMessage,
           );
         }
+      
       case 400:
         if (errorMessage.contains('invalid brand_id')) {
-          NotificationService.showError(
-            context: context,
-            title: 'Configuration Error',
-            message: 'Invalid brand ID. Please contact support.',
-            errorType: ErrorType.apiNotFound,
-          );
           throw VideoServiceException(
             VideoServiceError.invalidBrandId,
             'Configuration error. Please contact support.',
             technicalDetails: errorMessage,
           );
         } else if (errorMessage.contains('reached your post generation limit')) {
-          NotificationService.showError(
-            context: context,
-            title: 'Generation Limit Reached',
-            message: 'You have reached your video generation limit.',
-            errorType: ErrorType.serviceError,
-          );
           throw VideoServiceException(
             VideoServiceError.generationLimitExceeded,
             'Video generation limit reached.',
             technicalDetails: errorMessage,
           );
         } else if (errorMessage.contains('3 posts inProgress')) {
-          NotificationService.showError(
-            context: context,
-            title: 'Queue Full',
-            message: 'Please wait for your current videos to complete.',
-            errorType: ErrorType.serviceError,
-          );
           throw VideoServiceException(
             VideoServiceError.maxQueueReached,
             'Please wait for current videos to complete.',
             technicalDetails: errorMessage,
           );
         }
-        NotificationService.showError(
-          context: context,
-          title: 'Request Error',
-          message: 'Unable to process request.',
-          errorType: ErrorType.serviceError,
-          technicalDetails: errorMessage,
-        );
         throw VideoServiceException(
           VideoServiceError.serverError,
           'Unable to process request.',
           technicalDetails: errorMessage,
         );
       default:
-        NotificationService.showError(
-          context: context,
-          title: 'Server Error',
-          message: 'Unable to connect to server.',
-          errorType: ErrorType.serviceError,
-          technicalDetails: 'Status code: $statusCode, Message: $errorMessage',
-        );
         throw VideoServiceException(
           VideoServiceError.serverError,
           'Unable to connect to server.',
@@ -598,7 +513,7 @@ class VideoGenerationService {
           message: 'Video generation has been cancelled.',
         );
       } else {
-        _handlePredisError(response.statusCode, jsonDecode(response.body), context);
+        _handlePredisError(response.statusCode, jsonDecode(response.body));
       }
     } catch (e) {
       if (e is VideoServiceException) rethrow;

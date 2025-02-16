@@ -489,53 +489,12 @@ class PredisVideoService {
           await _firestore.collection('users').doc(request.userId).update({
             'tokens': FieldValue.increment(-request.tokenCost),
           });
-          NotificationService.showSuccess(
-            context: context,
-            title: 'Video Generated',
-            message: 'Your video has been generated successfully',
-            playSound: true,
-          );
           break;
         case 'failed':
           final errorMessage = request.errorMessage;
           debugPrint('[PredisVideo] Generation failed: $errorMessage');
-          if (errorMessage != null && errorMessage.toLowerCase().contains('rate limit')) {
-            NotificationService.showError(
-              context: context,
-              title: 'Rate Limit Exceeded',
-              message: 'Your request will be retried automatically',
-              showPopup: true,
-            );
-          } else {
-            NotificationService.showError(
-              context: context,
-              title: 'Generation Failed',
-              message: request.errorMessage ?? 'Failed to generate video',
-              showPopup: true,
-            );
-          }
-          break;
-        case 'queued':
-          if (request.status == 'queued') {
-            _getQueuePosition(requestId).then((position) {
-              if (position > 1) {
-                NotificationService.showInfo(
-                  context: context,
-                  title: 'Queue Update',
-                  message: 'Your request is #$position in queue',
-                );
-              }
-            });
-          }
-          break;
-        case 'processing':
-          debugPrint('[PredisVideo] Processing: ${request.progress}% complete');
-          break;
-        default:
           break;
       }
-    }, onError: (e, stack) {
-      debugPrint('[PredisVideo] Error listening to request: $e\n$stack');
     });
   }
 
@@ -573,19 +532,9 @@ class PredisVideoService {
       await _firestore.collection('users').doc(user.uid).update({
         'tokens': FieldValue.increment(tokensUsed),
       });
-
-      NotificationService.showSuccess(
-        context: context,
-        title: 'Request Cancelled',
-        message: 'Video generation request cancelled successfully',
-      );
     } catch (e) {
-      NotificationService.showError(
-        context: context,
-        title: 'Cancel Error',
-        message: 'Failed to cancel generation request',
-        technicalDetails: e.toString(),
-      );
+      debugPrint('[PredisVideo] Cancel error: $e');
+      rethrow;
     }
   }
 
@@ -615,19 +564,9 @@ class PredisVideoService {
         'progress': 0,
         'error': null,
       });
-
-      NotificationService.showSuccess(
-        context: context,
-        title: 'Request Retried',
-        message: 'Video generation request queued for retry',
-      );
     } catch (e) {
-      NotificationService.showError(
-        context: context,
-        title: 'Retry Error',
-        message: 'Failed to retry generation request',
-        technicalDetails: e.toString(),
-      );
+      debugPrint('[PredisVideo] Retry error: $e');
+      rethrow;
     }
   }
 
