@@ -11,6 +11,7 @@ import '../../../services/generation_request_service.dart';
 import '../../../services/image_generation_service.dart';
 import '../../widgets/loading_overlay.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 final imageServiceProvider = Provider((ref) => ImageGenerationService());
 final generationRequestServiceProvider = Provider((ref) => GenerationRequestService());
@@ -71,8 +72,7 @@ class _ImageAIScreenState extends ConsumerState<ImageAIScreen> {
   Widget _buildGenerationRequestCard(GenerationRequest request) {
     return GenerationRequestCard(
       request: request,
-      isExpanded: true,
-      showProgress: true,
+      reference: FirebaseFirestore.instance.collection('generation_queue').doc(request.id),
     );
   }
 
@@ -172,7 +172,7 @@ class _ImageAIScreenState extends ConsumerState<ImageAIScreen> {
                                   width: double.infinity,
                                   child: GenerationRequestCard(
                                     request: request,
-                                    isExpanded: true,
+                                    reference: FirebaseFirestore.instance.collection('generation_queue').doc(request.id),
                                     onRetry: () => _requestService.retryRequest(
                                       request.id,
                                       context,
@@ -221,7 +221,7 @@ class _ImageAIScreenState extends ConsumerState<ImageAIScreen> {
                                   width: double.infinity,
                                   child: GenerationRequestCard(
                                     request: request,
-                                    isExpanded: true,
+                                    reference: FirebaseFirestore.instance.collection('generation_queue').doc(request.id),
                                     onRetry: request.canRetry
                                         ? () => _requestService.retryRequest(
                                             request.id,

@@ -81,15 +81,39 @@ class _GeneratedVideoCardState extends State<GeneratedVideoCard> {
     });
 
     try {
-      final response = await http.get(
-        Uri.parse(widget.videoUrl),
-        headers: {'Accept': 'video/mp4'},
+      // Get the downloads directory
+      final directory = await getExternalStorageDirectory();
+      if (directory == null) {
+        throw Exception('Could not access external storage');
+      }
+
+      // Create core_ai_studio directory structure
+      final baseDir = Directory('${directory.path}/core_ai_studio/generated_content/video');
+      if (!await baseDir.exists()) {
+        await baseDir.create(recursive: true);
+      }
+
+      final file = File('${baseDir.path}/${widget.filename}');
+      
+      // Download with progress tracking
+      final response = await http.Client().send(
+        http.Request('GET', Uri.parse(widget.videoUrl))
+          ..headers['Accept'] = 'video/mp4'
       );
 
       if (response.statusCode == 200) {
-        final dir = await getApplicationDocumentsDirectory();
-        final file = File('${dir.path}/${widget.filename}');
-        await file.writeAsBytes(response.bodyBytes);
+        final contentLength = response.contentLength ?? 0;
+        int received = 0;
+
+        final sink = file.openWrite();
+        await response.stream.map((chunk) {
+          received += chunk.length;
+          setState(() {
+            _downloadProgress = contentLength > 0 ? received / contentLength : 0;
+          });
+          return chunk;
+        }).pipe(sink);
+        await sink.close();
 
         setState(() {
           _localPath = file.path;
@@ -111,7 +135,7 @@ class _GeneratedVideoCardState extends State<GeneratedVideoCard> {
         NotificationService.showSuccess(
           context: context,
           title: 'Download Complete',
-          message: 'Video downloaded successfully',
+          message: 'Video saved to ${baseDir.path}',
         );
       } else {
         throw Exception('Failed to download video');
@@ -121,11 +145,11 @@ class _GeneratedVideoCardState extends State<GeneratedVideoCard> {
         _isDownloading = false;
         _downloadProgress = 0;
       });
+      
       NotificationService.showError(
         context: context,
         title: 'Download Failed',
-        message: 'Failed to download video',
-        technicalDetails: e.toString(),
+        message: 'Failed to download video: ${e.toString()}',
       );
     }
   }

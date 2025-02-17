@@ -46,9 +46,6 @@ class GenerationProgressBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final progressWidth = screenWidth * progress;
-
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -59,118 +56,92 @@ class GenerationProgressBar extends StatelessWidget {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 6,
-                      height: 6,
-                      decoration: BoxDecoration(
-                        color: _getStartColor(context),
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: _getStartColor(context).withOpacity(0.5),
-                            blurRadius: 6,
-                            spreadRadius: 1,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      status,
-                      style: TextStyle(
-                        color: Colors.grey[300],
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
+     
                 Text(
                   '${(progress * 100).toInt()}%',
                   style: TextStyle(
                     color: Colors.grey[300],
-                    fontSize: 12,
+                    fontSize: 14,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
             ),
           ),
-        SizedBox(
-          height: height,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(height),
-            child: Stack(
-              children: [
-                // Background gradient
-                Container(
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        Colors.grey[900]!,
-                        Colors.grey[850]!,
-                      ],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                  ),
-                ),
-                // Progress gradient with animated glow
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 500),
-                  curve: Curves.easeInOut,
-                  width: progressWidth,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        _getStartColor(context),
-                        _getEndColor(context),
-                      ],
-                      begin: Alignment.centerLeft,
-                      end: Alignment.centerRight,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: _getStartColor(context).withOpacity(0.5),
-                        blurRadius: 8,
-                        spreadRadius: 0,
-                      ),
-                    ],
-                  ),
-                ),
-                // Animated shimmer effect
-                if (progress < 1.0)
-                  TweenAnimationBuilder<double>(
-                    tween: Tween(begin: -screenWidth, end: screenWidth),
-                    duration: const Duration(milliseconds: 1500),
-                    curve: Curves.easeInOut,
-                    builder: (context, value, child) => Positioned(
-                      left: value,
-                      child: Container(
-                        height: height,
-                        width: screenWidth * 0.2,
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: [
-                              Colors.white.withOpacity(0),
-                              Colors.white.withOpacity(0.2),
-                              Colors.white.withOpacity(0),
-                            ],
-                            stops: const [0.0, 0.5, 1.0],
-                          ),
-                        ),
-                      ),
-                    ),
-                    onEnd: () {},
-                  ),
-              ],
+        Stack(
+          children: [
+            // Background
+            Container(
+              height: height,
+              decoration: BoxDecoration(
+                color: Colors.grey[900],
+                borderRadius: BorderRadius.circular(height),
+              ),
             ),
-          ),
+            // Progress
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 500),
+              height: height,
+              width: MediaQuery.of(context).size.width * progress,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(height),
+                gradient: LinearGradient(
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                  colors: [
+                    _getStartColor(context),
+                    _getEndColor(context),
+                  ],
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: _getStartColor(context).withOpacity(0.5),
+                    blurRadius: 6,
+                    spreadRadius: 0,
+                  ),
+                ],
+              ),
+            ),
+            // Shimmer effect
+            if (progress < 1.0)
+              _buildShimmerEffect(context),
+          ],
         ),
       ],
+    );
+  }
+
+  Widget _buildShimmerEffect(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return TweenAnimationBuilder<double>(
+          tween: Tween(begin: -constraints.maxWidth, end: constraints.maxWidth),
+          duration: const Duration(milliseconds: 1500),
+          curve: Curves.easeInOut,
+          builder: (context, value, child) {
+            return Positioned(
+              left: value,
+              child: Container(
+                height: height,
+                width: constraints.maxWidth * 0.7,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.centerLeft,
+                    end: Alignment.centerRight,
+                    colors: [
+                      Colors.white.withOpacity(0),
+                      Colors.white.withOpacity(0.3),
+                      Colors.white.withOpacity(0),
+                    ],
+                    stops: const [0.0, 0.5, 1.0],
+                  ),
+                ),
+              ),
+            );
+          },
+          onEnd: () {},
+        );
+      },
     );
   }
 } 

@@ -233,7 +233,7 @@ class PredisVideoService {
           // Store video information
           final videoInfo = await _storeVideoInformation(
             userId: request.userId,
-            videoUrl: response['video_url'],
+            videoUrl: response['outputUrl'],
             prompt: request.prompt,
             requestId: request.id,
             metadata: request.metadata ?? {},
@@ -283,7 +283,7 @@ class PredisVideoService {
       // Store video information
       final videoInfo = await _storeVideoInformation(
         userId: request.userId,
-        videoUrl: response['video_url'],
+        videoUrl: response['outputUrl'],
         prompt: request.prompt,
         requestId: request.id,
         metadata: request.metadata ?? {},
@@ -644,11 +644,12 @@ class PredisVideoService {
         // Start polling for video status
         final videoData = await _pollForVideoStatus(postId, brandId, apiKey);
         
-        // Return response data
+        // Return response data without saving to Firebase
         return {
-          'video_url': videoData['video_url'] ?? '',
+          'outputUrl': videoData['video_url'] ?? '',
           'post_ids': [postId],
-          'post_status': videoData['status'] ?? 'completed',
+          'status': videoData['status'] ?? 'completed',
+          'thumbnailUrl': videoData['thumbnail_url'],
         };
       } else if (response.statusCode == 429) {
         throw Exception('Rate limit exceeded. Please try again later.');
@@ -693,6 +694,7 @@ class PredisVideoService {
             final post = posts[0];
             final status = post['status'];
             final videoUrl = post['generated_media']?[0]?['url'];
+            final thumbnailUrl = post['generated_media']?[0]?['thumb_url'];
             
             debugPrint('[PredisVideo] Poll status: $status, Video URL: ${videoUrl ?? 'not ready'}');
             
@@ -700,6 +702,7 @@ class PredisVideoService {
               return {
                 'status': 'completed',
                 'video_url': videoUrl,
+                'thumbnail_url': thumbnailUrl,
               };
             } else if (status == 'failed') {
               throw Exception('Video generation failed');
@@ -802,26 +805,8 @@ class PredisVideoService {
     try {
       // Generate a unique filename
       final filename = 'video_${DateTime.now().millisecondsSinceEpoch}.mp4';
-      final storagePath = 'users/$userId/videos/$filename';
       
-      // Download video from Predis URL
-      final response = await http.get(Uri.parse(videoUrl));
-      if (response.statusCode != 200) {
-        throw Exception('Failed to download video from Predis');
-      }
-
-      // Upload to Firebase Storage
-      final storageRef = _storage.ref().child(storagePath);
-      final uploadTask = storageRef.putData(
-        response.bodyBytes,
-        SettableMetadata(contentType: 'video/mp4'),
-      );
-
-      // Get download URL after upload
-      final snapshot = await uploadTask;
-      final downloadUrl = await snapshot.ref.getDownloadURL();
-
-      // Store video information in Firestore
+      // Store video information in Firestore without uploading to Firebase Storage
       final videoDoc = await _firestore
           .collection('users')
           .doc(userId)
@@ -829,31 +814,27 @@ class PredisVideoService {
           .add({
         'filename': filename,
         'originalUrl': videoUrl,
-        'downloadUrl': downloadUrl,
-        'storagePath': storagePath,
+        'downloadUrl': videoUrl, // Use original URL directly
         'prompt': prompt,
         'requestId': requestId,
         'metadata': metadata,
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
-        'size': response.contentLength,
+        'size': 0, // Will be updated when actually downloaded
         'duration': metadata['duration'] ?? '30',
         'isDownloaded': false,
-        'thumbnailUrl': '', // Will be generated
+        'isAddedToCollection': false,
+        'thumbnailUrl': '', // Will be updated when added to collection
       });
-
-      // Generate and store thumbnail
-      final thumbnailUrl = await _generateThumbnail(downloadUrl, userId, videoDoc.id);
-      await videoDoc.update({'thumbnailUrl': thumbnailUrl});
 
       return {
         'videoId': videoDoc.id,
-        'downloadUrl': downloadUrl,
-        'thumbnailUrl': thumbnailUrl,
+        'downloadUrl': videoUrl,
+        'thumbnailUrl': '',
         'filename': filename,
       };
     } catch (e) {
-      debugPrint('[PredisVideo] Error storing video: $e');
+      debugPrint('[PredisVideo] Error storing video info: $e');
       rethrow;
     }
   }
@@ -988,62 +969,64 @@ class PredisVideoService {
   }
 
   Future<void> addToCollection(String requestId, String videoUrl, String prompt, Map<String, dynamic> metadata) async {
-    try {
-      final user = _auth.currentUser;
-      if (user == null) throw Exception('User not authenticated');
+    final user = _auth.currentUser;
+    if (user == null) throw Exception('User not authenticated');
 
-      // Create video document in user's collection
-      final videoDoc = await _firestore
+    try {
+      // Add to user's generated_videos collection instead of video_collection
+      await _firestore
           .collection('users')
           .doc(user.uid)
-          .collection('video_collection')
+          .collection('generated_videos')
           .doc(requestId)
           .set({
         'videoUrl': videoUrl,
         'prompt': prompt,
         'metadata': metadata,
-        'addedAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
+        'createdAt': FieldValue.serverTimestamp(),
+        'userId': user.uid,
       });
 
-      // Update request to mark as added to collection
+      // Update the request to mark it as added to collection
       await _firestore
           .collection('generation_queue')
           .doc(requestId)
           .update({
         'addedToCollection': true,
-        'updatedAt': FieldValue.serverTimestamp(),
       });
+
+      debugPrint('[PredisVideo] Successfully added to collection: $requestId');
     } catch (e) {
       debugPrint('[PredisVideo] Error adding to collection: $e');
-      rethrow;
+      throw Exception('Failed to add video to collection: $e');
     }
   }
 
   Future<void> removeFromCollection(String requestId) async {
-    try {
-      final user = _auth.currentUser;
-      if (user == null) throw Exception('User not authenticated');
+    final user = _auth.currentUser;
+    if (user == null) throw Exception('User not authenticated');
 
-      // Remove from collection
+    try {
+      // Remove from user's generated_videos collection
       await _firestore
           .collection('users')
           .doc(user.uid)
-          .collection('video_collection')
+          .collection('generated_videos')
           .doc(requestId)
           .delete();
 
-      // Update request to mark as removed from collection
+      // Update the request to mark it as removed from collection
       await _firestore
           .collection('generation_queue')
           .doc(requestId)
           .update({
         'addedToCollection': false,
-        'updatedAt': FieldValue.serverTimestamp(),
       });
+
+      debugPrint('[PredisVideo] Successfully removed from collection: $requestId');
     } catch (e) {
       debugPrint('[PredisVideo] Error removing from collection: $e');
-      rethrow;
+      throw Exception('Failed to remove video from collection: $e');
     }
   }
 } 

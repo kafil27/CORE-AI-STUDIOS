@@ -24,7 +24,7 @@ final videoServiceProvider = Provider<PredisVideoService>((ref) => PredisVideoSe
 final generationRequestServiceProvider = Provider((ref) => GenerationRequestService());
 
 class VideoAIScreen extends ConsumerStatefulWidget {
-  const VideoAIScreen({Key? key}) : super(key: key);
+  const VideoAIScreen({super.key});
 
   @override
   ConsumerState<VideoAIScreen> createState() => _VideoAIScreenState();
@@ -42,6 +42,9 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
   bool _isGenerating = false;
   bool _showOutput = false;
   bool _isAddedToCollection = false;
+  final TextEditingController _promptController = TextEditingController();
+  bool _isLoading = false;
+  String? _error;
 
   @override
   void initState() {
@@ -55,7 +58,9 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
 
   @override
   void dispose() {
+    _scrollController.dispose();
     _focusNode.dispose();
+    _promptController.dispose();
     super.dispose();
   }
 
@@ -100,15 +105,12 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: GenerationRequestCard(
                   request: _currentRequest!,
-                  showProgress: true,
-                  onCancel: _currentRequest!.status.toLowerCase() == 'pending' 
-                    ? () => _handleCancelRequest(_currentRequest!.id)
-                    : null,
-                  isAddedToCollection: _isAddedToCollection,
+                  reference: FirebaseFirestore.instance.collection('generation_queue').doc(_currentRequest!.id),
+                  onRetry: () => _retryGeneration(_currentRequest!.id),
+                  onCancel: () => _cancelGeneration(_currentRequest!.id),
                   onCollectionToggle: _handleCollectionToggle,
                 ),
               ),
-      
           ],
         ),
       ),
@@ -243,12 +245,16 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
         });
 
         // Listen to request updates
-        FirebaseFirestore.instance
+        StreamSubscription<DocumentSnapshot>? subscription;
+        subscription = FirebaseFirestore.instance
             .collection('generation_queue')
             .doc(requestId)
             .snapshots()
             .listen((snapshot) {
-          if (!snapshot.exists) return;
+          if (!mounted || !snapshot.exists) {
+            subscription?.cancel();
+            return;
+          }
           
           try {
             final data = snapshot.data()!;
@@ -268,6 +274,7 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
                 message: 'Your video has been generated successfully!',
                 playSound: true,
               );
+              subscription?.cancel(); // Cancel subscription after completion
             } else if (request.status.toLowerCase() == 'failed') {
               NotificationService.showError(
                 context: context,
@@ -278,12 +285,15 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
               setState(() {
                 _isGenerating = false;
               });
+              subscription?.cancel(); // Cancel subscription after failure
             }
           } catch (e) {
             debugPrint('Error parsing request data: $e');
+            subscription?.cancel();
           }
         }, onError: (error) {
           debugPrint('Error listening to request updates: $error');
+          subscription?.cancel();
         });
       } else {
         throw Exception('Failed to start video generation');
@@ -304,6 +314,8 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
   }
 
   void _updateGenerationStatus(GenerationRequest request) {
+    if (!mounted) return;
+    
     setState(() {
       _currentRequest = request;
       
@@ -321,9 +333,8 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
         }
       } else if (request.status.toLowerCase() == 'completed') {
         _currentRequest = request.copyWith(progress: 100.0);
+        _isGenerating = false; // Ensure we stop generating state when complete
       }
-      
-      _isGenerating = request.status.toLowerCase() != 'completed';
       
       if (request.status.toLowerCase() == 'completed') {
         _showOutput = true;
@@ -396,10 +407,12 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
         NotificationService.showError(
           context: context,
           title: shouldAdd ? 'Add to Collection Failed' : 'Remove from Collection Failed',
-          message: 'Failed to update collection',
+          message: 'Failed to update collection. Please ensure you have the necessary permissions.',
           technicalDetails: e.toString(),
         );
       }
+      // Reset the state to reflect the failed operation
+      setState(() => _isAddedToCollection = !shouldAdd);
     }
   }
 
@@ -448,5 +461,96 @@ class _VideoAIScreenState extends ConsumerState<VideoAIScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildGenerationRequestCard(GenerationRequest request) {
+    return GenerationRequestCard(
+      request: request,
+      reference: FirebaseFirestore.instance.collection('generation_queue').doc(request.id),
+      onRetry: () => _retryGeneration(request.id),
+      onCancel: () => _cancelGeneration(request.id),
+    );
+  }
+
+  Future<void> _generateVideo(String prompt) async {
+    if (!mounted) return;
+    
+    setState(() {
+      _isGenerating = true;
+      _error = null;
+    });
+
+    try {
+      final videoService = ref.read(videoServiceProvider);
+      final requestId = await videoService.submitRequest(prompt, context);
+
+      if (requestId != null) {
+        if (!mounted) return;
+        NotificationService.showSuccess(
+          context: context,
+          title: 'Generation Started',
+          message: 'Your video is being generated',
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+      });
+      NotificationService.showError(
+        context: context,
+        title: 'Generation Failed',
+        message: 'Failed to start video generation',
+        technicalDetails: e.toString(),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isGenerating = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _retryGeneration(String requestId) async {
+    if (!mounted) return;
+    
+    try {
+      final videoService = ref.read(videoServiceProvider);
+      await videoService.retryRequest(requestId, context);
+      setState(() {
+        _isGenerating = true;
+        _error = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      NotificationService.showError(
+        context: context,
+        title: 'Retry Failed',
+        message: 'Failed to retry video generation',
+        technicalDetails: e.toString(),
+      );
+    }
+  }
+
+  Future<void> _cancelGeneration(String requestId) async {
+    if (!mounted) return;
+    
+    try {
+      final videoService = ref.read(videoServiceProvider);
+      await videoService.cancelRequest(requestId, context);
+      setState(() {
+        _isGenerating = false;
+        _error = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      NotificationService.showError(
+        context: context,
+        title: 'Cancel Failed',
+        message: 'Failed to cancel video generation',
+        technicalDetails: e.toString(),
+      );
+    }
   }
 } 

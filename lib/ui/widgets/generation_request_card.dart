@@ -15,59 +15,101 @@ import '../../services/downloads_service.dart';
 import '../../services/notification_service.dart';
 import 'loading_overlay.dart';
 import 'generation_progress_bar.dart';
+import 'package:flutter/services.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'dart:ui';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as path;
+import 'package:gradient_progress_bar/gradient_progress_bar.dart';
+import '../../services/predis_video_service.dart';
+import '../../config/ai_service_config.dart';
+import '../screens/ai_features/video_ai_screen.dart';
 
 class GenerationRequestCard extends ConsumerStatefulWidget {
   final GenerationRequest request;
-  final bool isExpanded;
+  final DocumentReference reference;
   final VoidCallback? onRetry;
-  final bool showProgress;
   final VoidCallback? onCancel;
-  final bool isAddedToCollection;
   final Function(bool)? onCollectionToggle;
 
   const GenerationRequestCard({
-    super.key,
+    Key? key,
     required this.request,
-    this.isExpanded = false,
+    required this.reference,
     this.onRetry,
-    this.showProgress = true,
     this.onCancel,
-    this.isAddedToCollection = false,
     this.onCollectionToggle,
-  });
+  }) : super(key: key);
 
   @override
   ConsumerState<GenerationRequestCard> createState() => _GenerationRequestCardState();
 }
 
-class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> with SingleTickerProviderStateMixin {
+class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> with TickerProviderStateMixin {
   bool _isDownloading = false;
   double _downloadProgress = 0;
   bool _isAddingToCollection = false;
   late AnimationController _progressController;
-  Animation<double>? _progressAnimation;
+  late AnimationController _fadeController;
+  late Animation<double> _progressAnimation;
+  late Animation<double> _fadeAnimation;
   String _currentStatus = '';
   bool _hasError = false;
   String? _errorMessage;
   String? _videoUrl;
   String? _fileName;
   bool _isVideoReady = false;
+  late AnimationController _tickController;
+  late Animation<double> _tickAnimation;
+  bool _showCompletionTick = false;
 
   @override
   void initState() {
     super.initState();
+    _initializeAnimations();
+    _setupProgressAnimation(initial: true);
+    _updateStatus();
+    _processVideoOutput();
+    _createRequiredDirectories();
+  }
+
+  void _initializeAnimations() {
+    // Progress animation controller
     _progressController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1500),
     );
-    _setupProgressAnimation(initial: true);
-    _updateStatus();
-    _processVideoOutput();
+
+    // Fade animation controller
+    _fadeController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    );
+
+    _fadeAnimation = CurvedAnimation(
+      parent: _fadeController,
+      curve: Curves.easeInOut,
+    );
+
+    _fadeController.forward();
+
+    // Tick animation controller
+    _tickController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    );
+
+    _tickAnimation = CurvedAnimation(
+      parent: _tickController,
+      curve: Curves.elasticOut,
+    );
   }
 
   @override
   void dispose() {
+    _tickController.dispose();
     _progressController.dispose();
+    _fadeController.dispose();
     super.dispose();
   }
 
@@ -77,27 +119,28 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
     
     if (status == 'pending') {
       targetProgress = 0.2;
+      _showCompletionTick = false;
     } else if (status == 'processing') {
-      final currentProgress = _progressAnimation?.value ?? 0.0;
       final apiProgress = widget.request.progress != null ? 
         (widget.request.progress! / 100).clamp(0.0, 0.8) : 0.4;
-      targetProgress = apiProgress > currentProgress ? apiProgress : currentProgress;
+      targetProgress = apiProgress;
+      _showCompletionTick = false;
     } else if (status == 'completed') {
       targetProgress = 1.0;
+      _showCompletionTick = true;
+      _tickController.forward();
     } else if (status == 'failed') {
       _hasError = true;
       _errorMessage = widget.request.errorMessage ?? 'Generation failed';
     }
 
-    double startProgress = initial ? 0.0 : _progressAnimation?.value ?? 0.0;
-    
-    _progressAnimation = Tween<double>(
-      begin: startProgress,
+      _progressAnimation = Tween<double>(
+      begin: initial ? 0.0 : _progressAnimation.value,
       end: targetProgress,
-    ).animate(CurvedAnimation(
-      parent: _progressController,
-      curve: Curves.easeInOut,
-    ));
+      ).animate(CurvedAnimation(
+        parent: _progressController,
+        curve: Curves.easeInOut,
+      ));
 
     if (!initial && mounted) {
       _progressController.forward(from: 0);
@@ -134,20 +177,34 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
       
       print("[DEBUG] Processing video output: ${result.toString()}");
       
-      // Extract video URL and post_ids first
       String? videoUrl;
+      String? thumbnailUrl;
       List<dynamic>? postIds;
       
+      // Try to get URL from different possible keys
       if (result.containsKey('outputUrl')) {
         videoUrl = result['outputUrl'] as String?;
-        print("[DEBUG] Found video URL: $videoUrl");
-      }
-      if (result.containsKey('post_ids')) {
-        postIds = result['post_ids'] as List<dynamic>?;
-        print("[DEBUG] Found post IDs: $postIds");
+      } else if (result.containsKey('video_url')) {
+        videoUrl = result['video_url'] as String?;
+      } else if (result.containsKey('url')) {
+        videoUrl = result['url'] as String?;
       }
       
-      // Only update state if we have valid output
+      // Try to get thumbnail from different possible keys
+      if (result.containsKey('thumbnailUrl')) {
+        thumbnailUrl = result['thumbnailUrl'] as String?;
+      } else if (result.containsKey('thumbnail_url')) {
+        thumbnailUrl = result['thumbnail_url'] as String?;
+      }
+      
+      if (result.containsKey('post_ids')) {
+        postIds = result['post_ids'] as List<dynamic>?;
+      }
+      
+      print("[DEBUG] Found video URL: $videoUrl");
+      print("[DEBUG] Found thumbnail URL: $thumbnailUrl");
+      print("[DEBUG] Found post IDs: $postIds");
+      
       if (videoUrl != null || (postIds != null && postIds.isNotEmpty)) {
         setState(() {
           _videoUrl = videoUrl;
@@ -255,83 +312,75 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
   }
 
   Widget _buildThumbnailSection(String videoUrl) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        height: 200,
+    return Container(
+      height: 220,
         width: double.infinity,
         decoration: BoxDecoration(
-          color: Colors.grey[900],
-          borderRadius: BorderRadius.circular(12),
-        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.2),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
         child: Stack(
           fit: StackFit.expand,
-          children: _isVideoReady 
-            ? [
-                VTImageView(
-                  videoUrl: videoUrl,
-                  assetPlaceHolder: 'assets/bot_image.png',
-                  errorBuilder: (context, error, stack) => _buildVideoPlaceholder(),
+          children: [
+            CachedNetworkImage(
+              imageUrl: videoUrl,
+              fit: BoxFit.cover,
+              placeholder: (context, url) => _buildVideoPlaceholder(),
+              errorWidget: (context, url, error) => _buildVideoPlaceholder(),
+            ),
+            Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.transparent,
+                    Colors.black.withOpacity(0.7),
+                  ],
+                  stops: const [0.6, 1.0],
                 ),
-                // Play button overlay
-                Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: () => _openVideo(videoUrl),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Colors.black.withOpacity(0.3),
-                            Colors.black.withOpacity(0.7),
-                          ],
-                        ),
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: Colors.black38,
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: Colors.white24,
-                                width: 2,
-                              ),
-                            ),
-                            child: const Icon(
-                              Icons.play_arrow_rounded,
-                              color: Colors.white,
-                              size: 32,
-                            ),
+              ),
+            ),
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                onTap: () => _openVideo(videoUrl),
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: Colors.black45,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                        color: Colors.white30,
+                            width: 2,
                           ),
-                          if (_fileName != null) ...[
-                            const SizedBox(height: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: Colors.black45,
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text(
-                                _fileName!,
-                                style: const TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ],
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.3),
+                          blurRadius: 8,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                        ),
+                        child: const Icon(
+                          Icons.play_arrow_rounded,
+                          color: Colors.white,
+                      size: 40,
                       ),
                     ),
                   ),
                 ),
-              ]
-            : [_buildVideoPlaceholder()],
+              ),
+          ],
         ),
       ),
     );
@@ -340,34 +389,234 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
   Widget _buildVideoPlaceholder() {
     return Container(
       color: Colors.grey[900],
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+      child: Stack(
+        alignment: Alignment.center,
         children: [
-          Icon(
-            Icons.video_file,
-            size: 48,
-            color: Colors.grey[700],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            widget.request.status.toLowerCase() == 'completed' 
-              ? 'Processing Video Output...'
-              : 'Generating Video...',
-            style: TextStyle(
-              color: Colors.grey[600],
-              fontSize: 12,
+          // Background Pattern
+          Opacity(
+            opacity: 0.5,
+            child: Icon(
+              Icons.video_library_rounded,
+              size: 80,
+              color: Colors.grey[800],
             ),
           ),
-          if (_fileName != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              _fileName!,
-              style: TextStyle(
-                color: Colors.grey[500],
-                fontSize: 11,
+          // Loading Animation
+          if (!_isVideoReady)
+            LoadingAnimationWidget.staggeredDotsWave(
+              color: Colors.white70,
+              size: 40,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _createRequiredDirectories() async {
+    try {
+      final baseDir = await getExternalStorageDirectory();
+      if (baseDir != null) {
+        final videoDir = Directory(path.join(
+          baseDir.path,
+          'core_ai_studios',
+          'generatedcontent',
+          'video',
+        ));
+        if (!await videoDir.exists()) {
+          await videoDir.create(recursive: true);
+        }
+      }
+    } catch (e) {
+      print("[DEBUG] Error creating directories: $e");
+    }
+  }
+
+  Widget _buildGenerationSection() {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 16),
+      child: Row(
+        children: [
+          Expanded(
+            child: Stack(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: LinearProgressIndicator(
+                    value: _progressAnimation.value,
+                    minHeight: 6,
+                    backgroundColor: Colors.grey[900],
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      _progressAnimation.value == 1.0 ? Colors.green : _getStatusColor(),
+                    ),
+                  ),
+                ),
+                if (_currentStatus.isNotEmpty)
+                  Positioned(
+                    right: 24,
+                    top: -10,
+                    child: Text(
+                      '${(_progressAnimation.value * 100).toInt()}%',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey[400],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          if (_showCompletionTick)
+            ScaleTransition(
+              scale: _tickAnimation,
+              child: const Padding(
+                padding: EdgeInsets.only(left: 8),
+                child: Icon(
+                  Icons.check_circle,
+                  color: Colors.green,
+                  size: 16,
+                ),
               ),
             ),
-          ],
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final status = widget.request.status.toLowerCase();
+    final isGenerating = status == 'pending' || status == 'processing';
+    final isCompleted = status == 'completed';
+    
+    return AnimatedBuilder(
+      animation: _fadeAnimation,
+      builder: (context, child) => Opacity(
+        opacity: _fadeAnimation.value,
+        child: Card(
+          elevation: 8,
+          color: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Colors.black.withOpacity(0.7),
+                  Colors.black.withOpacity(0.9),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: Colors.white.withOpacity(0.1),
+                width: 1,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (isGenerating || isCompleted) 
+                  _buildGenerationSection(),
+                if (_hasError) ...[
+                  const SizedBox(height: 16),
+                  _buildErrorSection(),
+                ],
+                if (isCompleted && _videoUrl != null)
+                  _buildOutputSection(),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErrorSection() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.red.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: Colors.red.withOpacity(0.3),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.error_outline,
+            color: Colors.red[400],
+            size: 24,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              _errorMessage ?? 'An error occurred',
+              style: TextStyle(
+                color: Colors.red[400],
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          if (widget.onRetry != null)
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              color: Colors.red[400],
+              onPressed: widget.onRetry,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOutputSection() {
+    if (!_isVideoReady || _videoUrl == null) return const SizedBox.shrink();
+
+    return AnimatedSlide(
+      duration: const Duration(milliseconds: 300),
+      offset: Offset.zero,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 16),
+          _buildThumbnailSection(_videoUrl!),
+          const SizedBox(height: 16),
+          Center(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _buildIconButton(
+                  icon: _isDownloading ? Icons.download_done : Icons.download_rounded,
+                  color: _isDownloading ? Colors.green : Colors.blue,
+                  onPressed: () => _downloadVideo(_videoUrl!),
+                  loading: _isDownloading,
+                ),
+                const SizedBox(width: 16),
+                _buildIconButton(
+                  icon: Icons.play_circle_rounded,
+                  color: Colors.purple,
+                  onPressed: () => _openVideo(_videoUrl!),
+                ),
+                const SizedBox(width: 16),
+                _buildIconButton(
+                  icon: widget.onCollectionToggle != null ? (widget.onCollectionToggle!(widget.request.metadata?['isAddedToCollection'] ?? false) ? Icons.favorite : Icons.favorite_border_rounded) : Icons.favorite_border_rounded,
+                  color: widget.onCollectionToggle != null ? (widget.onCollectionToggle!(widget.request.metadata?['isAddedToCollection'] ?? false) ? Colors.red : Colors.grey) : Colors.grey,
+                  onPressed: _addToCollection,
+                  loading: _isAddingToCollection,
+                ),
+                const SizedBox(width: 16),
+                _buildIconButton(
+                  icon: Icons.refresh_rounded,
+                  color: Colors.orange,
+                  onPressed: _resetGeneration,
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -376,38 +625,77 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
   Future<void> _downloadVideo(String url) async {
     if (_isDownloading) return;
 
-    try {
       setState(() {
         _isDownloading = true;
         _downloadProgress = 0;
       });
 
-      final status = await Permission.storage.request();
-      if (!status.isGranted) {
-        throw Exception('Storage permission denied');
+    try {
+      // Get Firebase Storage reference
+      final storage = FirebaseStorage.instance;
+      final userId = widget.request.userId;
+      final filename = 'video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final storagePath = 'users/$userId/videos/$filename';
+      
+      // Download video from URL
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode != 200) {
+        throw Exception('Failed to download video');
       }
 
-      final response = await http.Client().send(http.Request('GET', Uri.parse(url)));
-      final contentLength = response.contentLength ?? 0;
-      int downloaded = 0;
-      final bytes = <int>[];
+      // Upload to Firebase Storage
+      final storageRef = storage.ref().child(storagePath);
+      final uploadTask = storageRef.putData(
+        response.bodyBytes,
+        SettableMetadata(contentType: 'video/mp4'),
+      );
 
-      await for (final chunk in response.stream) {
-        bytes.addAll(chunk);
-        downloaded += chunk.length;
+      // Monitor upload progress
+      uploadTask.snapshotEvents.listen((TaskSnapshot snapshot) {
+        final progress = snapshot.bytesTransferred / snapshot.totalBytes;
         setState(() {
-          _downloadProgress = contentLength > 0 ? downloaded / contentLength : 0;
+          _downloadProgress = progress;
         });
+      });
+
+      // Get download URL after upload
+      final snapshot = await uploadTask;
+      final downloadUrl = await snapshot.ref.getDownloadURL();
+
+      // Save to local storage
+      final baseDir = await getExternalStorageDirectory();
+      if (baseDir == null) throw Exception('Could not access storage');
+
+      final videoDir = Directory(path.join(
+        baseDir.path,
+        'core_ai_studios',
+        'generatedcontent',
+        'video',
+      ));
+
+      if (!await videoDir.exists()) {
+        await videoDir.create(recursive: true);
       }
 
-      final fileName = 'video_${DateTime.now().millisecondsSinceEpoch}.mp4';
-      final file = await DownloadsService.getLocalFile(fileName, ContentType.video);
-      await file.writeAsBytes(bytes);
+      final localPath = path.join(videoDir.path, filename);
+      final file = File(localPath);
+      await file.writeAsBytes(response.bodyBytes);
 
       // Save to gallery
-      await Gal.putVideo(file.path);
+      await Gal.putVideo(localPath);
+
+        NotificationService.showSuccess(
+          context: context,
+        title: 'Download Complete',
+        message: 'Video saved to gallery and app storage',
+        );
     } catch (e) {
       print("[DEBUG] Download error: $e");
+        NotificationService.showError(
+          context: context,
+        title: 'Download Failed',
+        message: e.toString(),
+        );
     } finally {
       if (mounted) {
         setState(() {
@@ -418,57 +706,7 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
     }
   }
 
-  Widget _buildActionButtons() {
-    final status = widget.request.status.toLowerCase();
-    final isCompleted = status == 'completed';
-    final videoUrl = widget.request.result?['outputUrl'] as String?;
-    final bool showNewGeneration = isCompleted || status == 'failed';
-
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.end,
-      children: [
-        if (showNewGeneration)
-          _buildAnimatedIconButton(
-            icon: Icons.add_circle_outline,
-            color: Colors.teal,
-            onPressed: () {
-              // Handle new generation
-              Navigator.of(context).pop(); // Close current generation view
-            },
-          ),
-        if (isCompleted && videoUrl != null) ...[
-          const SizedBox(width: 8),
-          _buildAnimatedIconButton(
-            icon: _isDownloading ? Icons.download_done : Icons.download,
-            color: _isDownloading ? Colors.green : Colors.blue,
-            onPressed: () => _downloadVideo(videoUrl),
-            loading: _isDownloading,
-          ),
-          const SizedBox(width: 8),
-          _buildAnimatedIconButton(
-            icon: Icons.play_circle_outline,
-            color: Colors.purple,
-            onPressed: () => _openVideo(videoUrl),
-          ),
-          const SizedBox(width: 8),
-          _buildAnimatedIconButton(
-            icon: widget.isAddedToCollection ? Icons.favorite : Icons.favorite_border,
-            color: widget.isAddedToCollection ? Colors.red : Colors.grey,
-            onPressed: () => _addToCollection(),
-            loading: _isAddingToCollection,
-          ),
-        ] else if (status == 'pending' && widget.onCancel != null) ...[
-          _buildAnimatedIconButton(
-            icon: Icons.cancel_outlined,
-            color: Colors.red,
-            onPressed: () => widget.onCancel!(),
-          ),
-        ],
-      ],
-    );
-  }
-
-  Widget _buildAnimatedIconButton({
+  Widget _buildIconButton({
     required IconData icon,
     required Color color,
     required VoidCallback onPressed,
@@ -477,34 +715,95 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(30),
         onTap: loading ? null : onPressed,
-        child: Container(
-          padding: const EdgeInsets.all(8),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(20),
+            shape: BoxShape.circle,
             border: Border.all(
               color: color.withOpacity(0.3),
               width: 1,
             ),
+            boxShadow: [
+              BoxShadow(
+                color: color.withOpacity(0.1),
+                blurRadius: 8,
+                spreadRadius: 2,
+              ),
+            ],
           ),
           child: loading
-              ? SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: LoadingAnimationWidget.staggeredDotsWave(
-                    color: color,
-                    size: 20,
-                  ),
-                )
-              : Icon(
-                  icon,
+            ? SizedBox(
+                width: 24,
+                height: 24,
+                child: LoadingAnimationWidget.staggeredDotsWave(
                   color: color,
-                  size: 24,
+                  size: 20,
                 ),
+              )
+            : Icon(
+                icon,
+                color: color,
+                size: 24,
+                    ),
+                  ),
+                ),
+    );
+  }
+
+  void _resetGeneration() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.grey[900],
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
         ),
-      ),
+        title: const Text(
+          'Reset Generation',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'This will clear the current output. If not saved, the generated content will be lost. Continue?',
+          style: TextStyle(color: Colors.grey),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              'Cancel',
+              style: TextStyle(color: Colors.grey[400]),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              setState(() {
+                _videoUrl = null;
+                _isVideoReady = false;
+                _fileName = null;
+                _currentStatus = '';
+                _hasError = false;
+                _errorMessage = null;
+                _showCompletionTick = false;
+              });
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red[700],
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: const Text(
+              'Reset',
+              style: TextStyle(color: Colors.white),
+            ),
+                        ),
+                      ],
+                    ),
     );
   }
 
@@ -514,7 +813,7 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
     setState(() => _isAddingToCollection = true);
     
     try {
-      final videoUrl = widget.request.result?['outputUrl'] as String?;
+      final videoUrl = widget.request.outputUrl;
       if (videoUrl == null) throw Exception('Video URL not found');
 
       // Add to Firestore
@@ -558,126 +857,263 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
     }
   }
 
-  Widget _buildGenerationSection() {
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 16),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 24),
-            child: GenerationProgressBar(
-              progress: _progressAnimation?.value ?? 0.0,
-              status: _currentStatus,
-              showLabel: true,
-              height: 4,
-              startColor: _getStatusColor(),
-              endColor: _getStatusColor().withOpacity(0.7),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'This may take a few minutes',
-            style: TextStyle(
-              color: Colors.grey[600],
-              fontSize: 14,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _buildProgressBar() {
+    if (widget.request.status == 'completed') {
+      return const SizedBox.shrink();
+    }
 
-  Widget _buildOutputSection() {
-    if (!_isVideoReady || _videoUrl == null) return const SizedBox.shrink();
-
+    final progress = (widget.request.progress ?? 0.0).clamp(0.0, 100.0) / 100;
+    
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SizedBox(height: 16),
-        const Divider(color: Colors.white24),
-        const SizedBox(height: 16),
-        _buildThumbnailSection(_videoUrl!),
-        const SizedBox(height: 16),
-        _buildActionButtons(),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 4),
+          child: Text(
+            '${(progress * 100).toInt()}%',
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+        SizedBox(
+          height: 8,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: progress,
+              backgroundColor: Colors.grey[800],
+              valueColor: AlwaysStoppedAnimation<Color>(
+                HSLColor.fromAHSL(
+                  1.0,
+                  120 * progress,
+                  0.8,
+                  0.5,
+                ).toColor(),
+              ),
+            ),
+                    ),
+                  ),
+                ],
+    );
+  }
+
+  Widget _buildActionButtons() {
+    if (widget.request.status != 'completed') {
+      return const SizedBox.shrink();
+    }
+
+    final isDownloaded = widget.request.metadata?['isDownloaded'] ?? false;
+    final isAddedToCollection = widget.request.metadata?['isAddedToCollection'] ?? false;
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        IconButton(
+          icon: Icon(
+            isDownloaded ? Icons.check_circle : Icons.download,
+            color: isDownloaded ? Colors.green : Colors.white,
+          ),
+          onPressed: isDownloaded ? null : () => _handleDownload(context),
+          tooltip: isDownloaded ? 'Downloaded' : 'Download',
+        ),
+        const SizedBox(width: 8),
+        IconButton(
+          icon: Icon(
+            isAddedToCollection ? Icons.favorite : Icons.favorite_border,
+            color: isAddedToCollection ? Colors.red : Colors.white,
+          ),
+          onPressed: () => _handleAddToCollection(context),
+          tooltip: isAddedToCollection ? 'Added to Collection' : 'Add to Collection',
+        ),
+        const SizedBox(width: 8),
+        IconButton(
+          icon: const Icon(Icons.refresh, color: Colors.white),
+          onPressed: () => _handleRegenerate(context),
+          tooltip: 'Regenerate',
+        ),
+        if (isDownloaded)
+          IconButton(
+            icon: const Icon(Icons.delete_outline, color: Colors.white),
+            onPressed: () => _handleReset(context),
+            tooltip: 'Reset',
+          ),
       ],
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final status = widget.request.status.toLowerCase();
-    final isGenerating = status == 'pending' || status == 'processing';
-    
-    print("[DEBUG] Building card - Status: $status, IsGenerating: $isGenerating, VideoReady: $_isVideoReady, VideoUrl: $_videoUrl");
-    
-    return Card(
-      elevation: 4,
-      color: Colors.transparent,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Colors.black.withOpacity(0.7),
-              Colors.black.withOpacity(0.9),
-            ],
-          ),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (isGenerating) 
-              _buildGenerationSection(),
-            if (_hasError) ...[
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.red.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: Colors.red.withOpacity(0.3),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.error_outline,
-                      color: Colors.red[400],
-                      size: 20,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        _errorMessage ?? 'An error occurred',
-                        style: TextStyle(
-                          color: Colors.red[400],
-                          fontSize: 14,
-                        ),
-                      ),
-                    ),
-                    if (widget.onRetry != null)
-                      IconButton(
-                        icon: const Icon(Icons.refresh),
-                        color: Colors.red[400],
-                        onPressed: widget.onRetry,
-                      ),
-                  ],
-                ),
-              ),
-            ],
-            if (status == 'completed' && _videoUrl != null)
-              _buildOutputSection(),
-          ],
-        ),
-      ),
-    );
+  Future<void> _handleDownload(BuildContext context) async {
+    try {
+      final videoUrl = widget.request.outputUrl;
+      if (videoUrl == null || videoUrl.isEmpty) {
+        throw Exception('Video URL not available');
+      }
+
+      // Get the downloads directory
+      final directory = await getExternalStorageDirectory();
+      if (directory == null) {
+        throw Exception('Could not access external storage');
+      }
+
+      // Create core_ai_studio directory structure
+      final baseDir = Directory('${directory.path}/core_ai_studio/generated_content/video');
+      if (!await baseDir.exists()) {
+        await baseDir.create(recursive: true);
+      }
+
+      final filename = 'video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final file = File('${baseDir.path}/$filename');
+      
+      // Show download progress
+      NotificationService.showInfo(
+        context: context,
+        title: 'Downloading',
+        message: 'Starting video download...',
+      );
+
+      // Download with progress tracking
+      final response = await http.Client().send(
+        http.Request('GET', Uri.parse(videoUrl))
+          ..headers['Accept'] = 'video/mp4'
+      );
+
+      if (response.statusCode == 200) {
+        final contentLength = response.contentLength ?? 0;
+        int received = 0;
+
+        final sink = file.openWrite();
+        await response.stream.map((chunk) {
+          received += chunk.length;
+          // Update progress in Firestore
+          widget.reference.update({
+            'downloadProgress': contentLength > 0 ? (received / contentLength) * 100 : 0,
+          });
+          return chunk;
+        }).pipe(sink);
+        await sink.close();
+
+        // Mark as downloaded
+        await widget.reference.update({
+          'isDownloaded': true,
+          'localPath': file.path,
+          'downloadProgress': 100,
+        });
+
+        NotificationService.showSuccess(
+          context: context,
+          title: 'Download Complete',
+          message: 'Video saved to ${baseDir.path}',
+        );
+      } else {
+        throw Exception('Failed to download video');
+      }
+    } catch (e) {
+      NotificationService.showError(
+        context: context,
+        title: 'Download Failed',
+        message: e.toString(),
+      );
+    }
+  }
+
+  Future<void> _handleAddToCollection(BuildContext context) async {
+    try {
+      final videoUrl = widget.request.outputUrl;
+      if (videoUrl == null || videoUrl.isEmpty) {
+        throw Exception('Video URL not available');
+      }
+
+      final isAddedToCollection = widget.request.metadata?['isAddedToCollection'] ?? false;
+      
+      if (isAddedToCollection) {
+        // Remove from collection
+        await widget.reference.update({
+          'isAddedToCollection': false,
+        });
+        
+        NotificationService.showSuccess(
+          context: context,
+          title: 'Removed',
+          message: 'Video removed from collection',
+        );
+      } else {
+        // Add to collection
+        await widget.reference.update({
+          'isAddedToCollection': true,
+        });
+        
+        NotificationService.showSuccess(
+          context: context,
+          title: 'Added',
+          message: 'Video added to collection',
+        );
+      }
+    } catch (e) {
+      NotificationService.showError(
+        context: context,
+        title: 'Error',
+        message: e.toString(),
+      );
+    }
+  }
+
+  Future<void> _handleRegenerate(BuildContext context) async {
+    try {
+      final prompt = widget.request.prompt;
+      if (prompt.isEmpty) {
+        throw Exception('Original prompt not available');
+      }
+
+      // Create new request with same prompt
+      final videoService = ref.read(videoServiceProvider);
+      final requestId = await videoService.submitRequest(prompt, context);
+
+      if (requestId != null) {
+        NotificationService.showSuccess(
+          context: context,
+          title: 'Regeneration Started',
+          message: 'Your video is being regenerated',
+        );
+      }
+    } catch (e) {
+      NotificationService.showError(
+        context: context,
+        title: 'Regeneration Failed',
+        message: e.toString(),
+      );
+    }
+  }
+
+  Future<void> _handleReset(BuildContext context) async {
+    try {
+      final localPath = widget.request.metadata?['localPath'];
+      if (localPath != null) {
+        final file = File(localPath);
+        if (await file.exists()) {
+          await file.delete();
+        }
+      }
+
+      // Reset metadata
+      await widget.reference.update({
+        'isDownloaded': false,
+        'localPath': null,
+        'downloadProgress': 0,
+      });
+
+      NotificationService.showSuccess(
+        context: context,
+        title: 'Reset Complete',
+        message: 'Video has been reset',
+      );
+    } catch (e) {
+      NotificationService.showError(
+        context: context,
+        title: 'Reset Failed',
+        message: e.toString(),
+      );
+    }
   }
 } 
