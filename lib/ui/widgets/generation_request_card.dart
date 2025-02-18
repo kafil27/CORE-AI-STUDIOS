@@ -6,7 +6,6 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:http/http.dart' as http;
 import 'package:loading_animation_widget/loading_animation_widget.dart';
-import 'package:video_thumbnail_imageview/video_thumbnail_imageview.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import '../../models/generation_request.dart';
@@ -31,6 +30,8 @@ class GenerationRequestCard extends ConsumerStatefulWidget {
   final VoidCallback? onRetry;
   final VoidCallback? onCancel;
   final Function(bool)? onCollectionToggle;
+  final bool isAddedToCollection;
+  final bool isTogglingCollection;
 
   const GenerationRequestCard({
     Key? key,
@@ -39,6 +40,8 @@ class GenerationRequestCard extends ConsumerStatefulWidget {
     this.onRetry,
     this.onCancel,
     this.onCollectionToggle,
+    this.isAddedToCollection = false,
+    this.isTogglingCollection = false,
   }) : super(key: key);
 
   @override
@@ -195,6 +198,8 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
         thumbnailUrl = result['thumbnailUrl'] as String?;
       } else if (result.containsKey('thumbnail_url')) {
         thumbnailUrl = result['thumbnail_url'] as String?;
+      } else if (result.containsKey('preview_url')) {
+        thumbnailUrl = result['preview_url'] as String?;
       }
       
       if (result.containsKey('post_ids')) {
@@ -312,10 +317,18 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
   }
 
   Widget _buildThumbnailSection(String videoUrl) {
+    String? thumbnailUrl;
+    if (widget.request.result is Map<String, dynamic>) {
+      final result = widget.request.result as Map<String, dynamic>;
+      thumbnailUrl = result['thumbnail_url'] as String? ?? 
+                    result['thumbnailUrl'] as String? ?? 
+                    result['preview_url'] as String?;
+    }
+
     return Container(
       height: 220,
-        width: double.infinity,
-        decoration: BoxDecoration(
+      width: double.infinity,
+      decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
@@ -330,12 +343,18 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
         child: Stack(
           fit: StackFit.expand,
           children: [
-            CachedNetworkImage(
-              imageUrl: videoUrl,
-              fit: BoxFit.cover,
-              placeholder: (context, url) => _buildVideoPlaceholder(),
-              errorWidget: (context, url, error) => _buildVideoPlaceholder(),
-            ),
+            if (thumbnailUrl?.isNotEmpty == true)
+              CachedNetworkImage(
+                imageUrl: thumbnailUrl!,
+                fit: BoxFit.cover,
+                placeholder: (context, url) => _buildVideoPlaceholder(),
+                errorWidget: (context, url, error) {
+                  debugPrint('Thumbnail error: $error for URL: $url');
+                  return _buildVideoPlaceholder();
+                },
+              )
+            else
+              _buildVideoPlaceholder(),
             Container(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
@@ -349,20 +368,20 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
                 ),
               ),
             ),
-              Material(
-                color: Colors.transparent,
-                child: InkWell(
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
                 onTap: () => _openVideo(videoUrl),
                 child: Center(
                   child: Container(
                     padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
                       color: Colors.black45,
-                          shape: BoxShape.circle,
-                          border: Border.all(
+                      shape: BoxShape.circle,
+                      border: Border.all(
                         color: Colors.white30,
-                            width: 2,
-                          ),
+                        width: 2,
+                      ),
                       boxShadow: [
                         BoxShadow(
                           color: Colors.black.withOpacity(0.3),
@@ -370,16 +389,16 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
                           spreadRadius: 2,
                         ),
                       ],
-                        ),
-                        child: const Icon(
-                          Icons.play_arrow_rounded,
-                          color: Colors.white,
+                    ),
+                    child: const Icon(
+                      Icons.play_arrow_rounded,
+                      color: Colors.white,
                       size: 40,
-                      ),
                     ),
                   ),
                 ),
               ),
+            ),
           ],
         ),
       ),
@@ -518,8 +537,6 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (isGenerating || isCompleted) 
-                  _buildGenerationSection(),
                 if (_hasError) ...[
                   const SizedBox(height: 16),
                   _buildErrorSection(),
@@ -576,6 +593,9 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
   Widget _buildOutputSection() {
     if (!_isVideoReady || _videoUrl == null) return const SizedBox.shrink();
 
+    final isDownloaded = widget.request.metadata?['isDownloaded'] ?? false;
+    final isAddedToCollection = widget.request.metadata?['isAddedToCollection'] ?? false;
+
     return AnimatedSlide(
       duration: const Duration(milliseconds: 300),
       offset: Offset.zero,
@@ -590,10 +610,11 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 _buildIconButton(
-                  icon: _isDownloading ? Icons.download_done : Icons.download_rounded,
-                  color: _isDownloading ? Colors.green : Colors.blue,
+                  icon: isDownloaded ? Icons.check_circle : Icons.download_rounded,
+                  color: isDownloaded ? Colors.green : Colors.blue,
                   onPressed: () => _downloadVideo(_videoUrl!),
                   loading: _isDownloading,
+                  isActive: isDownloaded,
                 ),
                 const SizedBox(width: 16),
                 _buildIconButton(
@@ -603,10 +624,11 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
                 ),
                 const SizedBox(width: 16),
                 _buildIconButton(
-                  icon: widget.onCollectionToggle != null ? (widget.onCollectionToggle!(widget.request.metadata?['isAddedToCollection'] ?? false) ? Icons.favorite : Icons.favorite_border_rounded) : Icons.favorite_border_rounded,
-                  color: widget.onCollectionToggle != null ? (widget.onCollectionToggle!(widget.request.metadata?['isAddedToCollection'] ?? false) ? Colors.red : Colors.grey) : Colors.grey,
+                  icon: isAddedToCollection ? Icons.favorite : Icons.favorite_border_rounded,
+                  color: isAddedToCollection ? Colors.red : Colors.grey,
                   onPressed: _addToCollection,
                   loading: _isAddingToCollection,
+                  isActive: isAddedToCollection,
                 ),
                 const SizedBox(width: 16),
                 _buildIconButton(
@@ -625,77 +647,116 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
   Future<void> _downloadVideo(String url) async {
     if (_isDownloading) return;
 
-      setState(() {
-        _isDownloading = true;
-        _downloadProgress = 0;
-      });
+    setState(() {
+      _isDownloading = true;
+      _downloadProgress = 0;
+    });
 
     try {
-      // Get Firebase Storage reference
-      final storage = FirebaseStorage.instance;
-      final userId = widget.request.userId;
-      final filename = 'video_${DateTime.now().millisecondsSinceEpoch}.mp4';
-      final storagePath = 'users/$userId/videos/$filename';
+      // Request storage permissions
+      final storageStatus = await Permission.storage.request();
+      final mediaStatus = await Permission.mediaLibrary.request();
+      final externalStatus = await Permission.manageExternalStorage.request();
       
-      // Download video from URL
-      final response = await http.get(Uri.parse(url));
-      if (response.statusCode != 200) {
-        throw Exception('Failed to download video');
+      if (!storageStatus.isGranted || !mediaStatus.isGranted || !externalStatus.isGranted) {
+        throw Exception('Storage permissions are required to download videos');
       }
 
-      // Upload to Firebase Storage
-      final storageRef = storage.ref().child(storagePath);
-      final uploadTask = storageRef.putData(
-        response.bodyBytes,
-        SettableMetadata(contentType: 'video/mp4'),
-      );
-
-      // Monitor upload progress
-      uploadTask.snapshotEvents.listen((TaskSnapshot snapshot) {
-        final progress = snapshot.bytesTransferred / snapshot.totalBytes;
-        setState(() {
-          _downloadProgress = progress;
-        });
-      });
-
-      // Get download URL after upload
-      final snapshot = await uploadTask;
-      final downloadUrl = await snapshot.ref.getDownloadURL();
-
-      // Save to local storage
-      final baseDir = await getExternalStorageDirectory();
-      if (baseDir == null) throw Exception('Could not access storage');
-
-      final videoDir = Directory(path.join(
-        baseDir.path,
-        'core_ai_studios',
-        'generatedcontent',
-        'video',
-      ));
-
-      if (!await videoDir.exists()) {
-        await videoDir.create(recursive: true);
+      // Create download directory
+      Directory? baseDir;
+      if (Platform.isAndroid) {
+        baseDir = Directory('/storage/emulated/0/Download/CoreAIStudios');
+      } else {
+        final appDir = await getApplicationDocumentsDirectory();
+        baseDir = Directory('${appDir.path}/Downloads/CoreAIStudios');
       }
 
-      final localPath = path.join(videoDir.path, filename);
-      final file = File(localPath);
-      await file.writeAsBytes(response.bodyBytes);
+      if (!await baseDir.exists()) {
+        await baseDir.create(recursive: true);
+      }
+
+      // Generate unique filename
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final filename = 'video_$timestamp.mp4';
+      final file = File('${baseDir.path}/$filename');
+
+      // Download with progress tracking
+      final response = await http.Client().send(http.Request('GET', Uri.parse(url)));
+      final contentLength = response.contentLength ?? 0;
+      final sink = file.openWrite();
+      
+      int received = 0;
+      await response.stream.listen((chunk) {
+        received += chunk.length;
+        sink.add(chunk);
+        if (mounted && contentLength > 0) {
+          setState(() => _downloadProgress = received / contentLength);
+        }
+      }).asFuture();
+      
+      await sink.close();
 
       // Save to gallery
-      await Gal.putVideo(localPath);
+      await Gal.putVideo(file.path);
 
-        NotificationService.showSuccess(
-          context: context,
-        title: 'Download Complete',
-        message: 'Video saved to gallery and app storage',
+      // Update Firestore document
+      await widget.reference.update({
+        'metadata': {
+          ...widget.request.metadata ?? {},
+          'isDownloaded': true,
+          'downloadPath': file.path,
+          'downloadedAt': FieldValue.serverTimestamp(),
+        }
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.check_circle, color: Colors.white),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Text('Video downloaded successfully'),
+                ),
+                TextButton(
+                  onPressed: () => _openDownloadedFile(file.path),
+                  child: const Text('OPEN', style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.green[700],
+            duration: const Duration(seconds: 4),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
         );
+      }
     } catch (e) {
-      print("[DEBUG] Download error: $e");
-        NotificationService.showError(
-          context: context,
-        title: 'Download Failed',
-        message: e.toString(),
+      debugPrint('Download error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.error_outline, color: Colors.white),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(e.toString()),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.red[700],
+            duration: const Duration(seconds: 4),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
         );
+      }
     } finally {
       if (mounted) {
         setState(() {
@@ -706,11 +767,23 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
     }
   }
 
+  Future<void> _openDownloadedFile(String path) async {
+    try {
+      final file = File(path);
+      if (await file.exists()) {
+        await launchUrl(Uri.file(path));
+      }
+    } catch (e) {
+      debugPrint('Error opening file: $e');
+    }
+  }
+
   Widget _buildIconButton({
     required IconData icon,
     required Color color,
     required VoidCallback onPressed,
     bool loading = false,
+    bool isActive = false,
   }) {
     return Material(
       color: Colors.transparent,
@@ -721,15 +794,15 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
           duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
+            color: isActive ? color.withOpacity(0.2) : color.withOpacity(0.1),
             shape: BoxShape.circle,
             border: Border.all(
-              color: color.withOpacity(0.3),
+              color: isActive ? color : color.withOpacity(0.3),
               width: 1,
             ),
             boxShadow: [
               BoxShadow(
-                color: color.withOpacity(0.1),
+                color: isActive ? color.withOpacity(0.2) : color.withOpacity(0.1),
                 blurRadius: 8,
                 spreadRadius: 2,
               ),
@@ -748,9 +821,9 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
                 icon,
                 color: color,
                 size: 24,
-                    ),
-                  ),
-                ),
+              ),
+        ),
+      ),
     );
   }
 
@@ -801,9 +874,9 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
               'Reset',
               style: TextStyle(color: Colors.white),
             ),
-                        ),
-                      ],
-                    ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -813,35 +886,91 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
     setState(() => _isAddingToCollection = true);
     
     try {
-      final videoUrl = widget.request.outputUrl;
+      final videoUrl = _videoUrl;
       if (videoUrl == null) throw Exception('Video URL not found');
 
-      // Add to Firestore
-      await FirebaseFirestore.instance.collection('user_collection').add({
-        'userId': widget.request.userId,
-        'videoUrl': videoUrl,
+      final userId = widget.request.userId;
+      if (userId == null) throw Exception('User ID not found');
+
+      // Create collection document
+      final userCollectionsRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(userId)
+          .collection('collections');
+
+      final collectionDoc = await userCollectionsRef.add({
+        'type': 'video',
+        'sourceUrl': videoUrl,
         'prompt': widget.request.prompt,
         'createdAt': FieldValue.serverTimestamp(),
-        'type': 'video',
-        'metadata': widget.request.metadata,
+        'generationId': widget.request.id,
+        'metadata': {
+          'thumbnailUrl': widget.request.result?['thumbnail_url'] ?? 
+                         widget.request.result?['preview_url'],
+          'postId': widget.request.result?['post_ids']?[0],
+          'videoId': widget.request.result?['video_id'],
+          'originalRequest': widget.request.toMap(),
+        },
+        'status': 'active',
+        'lastModified': FieldValue.serverTimestamp(),
       });
 
-      // Update collection status
-      widget.onCollectionToggle?.call(true);
-      
-      NotificationService.showSuccess(
-        context: context,
-        title: 'Added to Collection',
-        message: 'Video has been added to your collection',
-      );
+      // Update request metadata
+      await widget.reference.update({
+        'metadata': {
+          ...widget.request.metadata ?? {},
+          'isAddedToCollection': true,
+          'collectionId': collectionDoc.id,
+          'addedToCollectionAt': FieldValue.serverTimestamp(),
+        }
+      });
+
+      if (mounted) {
+        setState(() => _isAddingToCollection = false);
+        widget.onCollectionToggle?.call(true);
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.favorite, color: Colors.red[400]),
+                const SizedBox(width: 12),
+                const Text('Added to your collection'),
+              ],
+            ),
+            backgroundColor: Colors.grey[900],
+            duration: const Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+        );
+      }
     } catch (e) {
-      NotificationService.showError(
-        context: context,
-        title: 'Error',
-        message: 'Failed to add to collection: ${e.toString()}',
-      );
-    } finally {
-      setState(() => _isAddingToCollection = false);
+      debugPrint('Error adding to collection: $e');
+      if (mounted) {
+        setState(() => _isAddingToCollection = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.error_outline, color: Colors.white),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text('Failed to add to collection: ${e.toString()}'),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.red[700],
+            duration: const Duration(seconds: 4),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+        );
+      }
     }
   }
 
@@ -849,271 +978,7 @@ class _GenerationRequestCardState extends ConsumerState<GenerationRequestCard> w
     try {
       await launchUrl(Uri.parse(url));
     } catch (e) {
-      NotificationService.showError(
-        context: context,
-        title: 'Error',
-        message: 'Failed to open video: ${e.toString()}',
-      );
-    }
-  }
-
-  Widget _buildProgressBar() {
-    if (widget.request.status == 'completed') {
-      return const SizedBox.shrink();
-    }
-
-    final progress = (widget.request.progress ?? 0.0).clamp(0.0, 100.0) / 100;
-    
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(bottom: 4),
-          child: Text(
-            '${(progress * 100).toInt()}%',
-            style: TextStyle(
-              color: Colors.white70,
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ),
-        SizedBox(
-          height: 8,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: progress,
-              backgroundColor: Colors.grey[800],
-              valueColor: AlwaysStoppedAnimation<Color>(
-                HSLColor.fromAHSL(
-                  1.0,
-                  120 * progress,
-                  0.8,
-                  0.5,
-                ).toColor(),
-              ),
-            ),
-                    ),
-                  ),
-                ],
-    );
-  }
-
-  Widget _buildActionButtons() {
-    if (widget.request.status != 'completed') {
-      return const SizedBox.shrink();
-    }
-
-    final isDownloaded = widget.request.metadata?['isDownloaded'] ?? false;
-    final isAddedToCollection = widget.request.metadata?['isAddedToCollection'] ?? false;
-
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        IconButton(
-          icon: Icon(
-            isDownloaded ? Icons.check_circle : Icons.download,
-            color: isDownloaded ? Colors.green : Colors.white,
-          ),
-          onPressed: isDownloaded ? null : () => _handleDownload(context),
-          tooltip: isDownloaded ? 'Downloaded' : 'Download',
-        ),
-        const SizedBox(width: 8),
-        IconButton(
-          icon: Icon(
-            isAddedToCollection ? Icons.favorite : Icons.favorite_border,
-            color: isAddedToCollection ? Colors.red : Colors.white,
-          ),
-          onPressed: () => _handleAddToCollection(context),
-          tooltip: isAddedToCollection ? 'Added to Collection' : 'Add to Collection',
-        ),
-        const SizedBox(width: 8),
-        IconButton(
-          icon: const Icon(Icons.refresh, color: Colors.white),
-          onPressed: () => _handleRegenerate(context),
-          tooltip: 'Regenerate',
-        ),
-        if (isDownloaded)
-          IconButton(
-            icon: const Icon(Icons.delete_outline, color: Colors.white),
-            onPressed: () => _handleReset(context),
-            tooltip: 'Reset',
-          ),
-      ],
-    );
-  }
-
-  Future<void> _handleDownload(BuildContext context) async {
-    try {
-      final videoUrl = widget.request.outputUrl;
-      if (videoUrl == null || videoUrl.isEmpty) {
-        throw Exception('Video URL not available');
-      }
-
-      // Get the downloads directory
-      final directory = await getExternalStorageDirectory();
-      if (directory == null) {
-        throw Exception('Could not access external storage');
-      }
-
-      // Create core_ai_studio directory structure
-      final baseDir = Directory('${directory.path}/core_ai_studio/generated_content/video');
-      if (!await baseDir.exists()) {
-        await baseDir.create(recursive: true);
-      }
-
-      final filename = 'video_${DateTime.now().millisecondsSinceEpoch}.mp4';
-      final file = File('${baseDir.path}/$filename');
-      
-      // Show download progress
-      NotificationService.showInfo(
-        context: context,
-        title: 'Downloading',
-        message: 'Starting video download...',
-      );
-
-      // Download with progress tracking
-      final response = await http.Client().send(
-        http.Request('GET', Uri.parse(videoUrl))
-          ..headers['Accept'] = 'video/mp4'
-      );
-
-      if (response.statusCode == 200) {
-        final contentLength = response.contentLength ?? 0;
-        int received = 0;
-
-        final sink = file.openWrite();
-        await response.stream.map((chunk) {
-          received += chunk.length;
-          // Update progress in Firestore
-          widget.reference.update({
-            'downloadProgress': contentLength > 0 ? (received / contentLength) * 100 : 0,
-          });
-          return chunk;
-        }).pipe(sink);
-        await sink.close();
-
-        // Mark as downloaded
-        await widget.reference.update({
-          'isDownloaded': true,
-          'localPath': file.path,
-          'downloadProgress': 100,
-        });
-
-        NotificationService.showSuccess(
-          context: context,
-          title: 'Download Complete',
-          message: 'Video saved to ${baseDir.path}',
-        );
-      } else {
-        throw Exception('Failed to download video');
-      }
-    } catch (e) {
-      NotificationService.showError(
-        context: context,
-        title: 'Download Failed',
-        message: e.toString(),
-      );
-    }
-  }
-
-  Future<void> _handleAddToCollection(BuildContext context) async {
-    try {
-      final videoUrl = widget.request.outputUrl;
-      if (videoUrl == null || videoUrl.isEmpty) {
-        throw Exception('Video URL not available');
-      }
-
-      final isAddedToCollection = widget.request.metadata?['isAddedToCollection'] ?? false;
-      
-      if (isAddedToCollection) {
-        // Remove from collection
-        await widget.reference.update({
-          'isAddedToCollection': false,
-        });
-        
-        NotificationService.showSuccess(
-          context: context,
-          title: 'Removed',
-          message: 'Video removed from collection',
-        );
-      } else {
-        // Add to collection
-        await widget.reference.update({
-          'isAddedToCollection': true,
-        });
-        
-        NotificationService.showSuccess(
-          context: context,
-          title: 'Added',
-          message: 'Video added to collection',
-        );
-      }
-    } catch (e) {
-      NotificationService.showError(
-        context: context,
-        title: 'Error',
-        message: e.toString(),
-      );
-    }
-  }
-
-  Future<void> _handleRegenerate(BuildContext context) async {
-    try {
-      final prompt = widget.request.prompt;
-      if (prompt.isEmpty) {
-        throw Exception('Original prompt not available');
-      }
-
-      // Create new request with same prompt
-      final videoService = ref.read(videoServiceProvider);
-      final requestId = await videoService.submitRequest(prompt, context);
-
-      if (requestId != null) {
-        NotificationService.showSuccess(
-          context: context,
-          title: 'Regeneration Started',
-          message: 'Your video is being regenerated',
-        );
-      }
-    } catch (e) {
-      NotificationService.showError(
-        context: context,
-        title: 'Regeneration Failed',
-        message: e.toString(),
-      );
-    }
-  }
-
-  Future<void> _handleReset(BuildContext context) async {
-    try {
-      final localPath = widget.request.metadata?['localPath'];
-      if (localPath != null) {
-        final file = File(localPath);
-        if (await file.exists()) {
-          await file.delete();
-        }
-      }
-
-      // Reset metadata
-      await widget.reference.update({
-        'isDownloaded': false,
-        'localPath': null,
-        'downloadProgress': 0,
-      });
-
-      NotificationService.showSuccess(
-        context: context,
-        title: 'Reset Complete',
-        message: 'Video has been reset',
-      );
-    } catch (e) {
-      NotificationService.showError(
-        context: context,
-        title: 'Reset Failed',
-        message: e.toString(),
-      );
+      debugPrint('Error opening video: $e');
     }
   }
 } 

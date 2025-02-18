@@ -53,6 +53,19 @@ service cloud.firestore {
             .hasAny(['createdAt', 'userId']);
         allow delete: if isOwner(userId);
       }
+
+      // Collections subcollection for saved videos
+      match /collections/{collectionId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && 
+          request.resource.data.keys().hasAll(['type', 'sourceUrl', 'prompt', 'generationId']) && 
+          request.resource.data.userId == userId;
+        allow update: if isOwner(userId) && 
+          request.resource.data.userId == userId && 
+          !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['createdAt', 'userId', 'generationId']);
+        allow delete: if isOwner(userId);
+      }
     }
 
     // Chats collection

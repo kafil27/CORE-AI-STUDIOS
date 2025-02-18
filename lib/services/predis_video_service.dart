@@ -225,10 +225,17 @@ class PredisVideoService {
             'status': GenerationStatus.processing.value,
             'startedAt': FieldValue.serverTimestamp(),
             'updatedAt': FieldValue.serverTimestamp(),
+            'progress': 20,
           });
 
           // Make API request
           final response = await _makeApiRequest(request);
+          
+          // Update progress to 60%
+          await _firestore.collection('generation_queue').doc(doc.id).update({
+            'progress': 60,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
           
           // Store video information
           final videoInfo = await _storeVideoInformation(
@@ -242,11 +249,13 @@ class PredisVideoService {
           // Update request with success
           await _firestore.collection('generation_queue').doc(doc.id).update({
             'status': GenerationStatus.completed.value,
-            'result': videoInfo['downloadUrl'],
-            'thumbnailUrl': videoInfo['thumbnailUrl'],
-            'videoId': videoInfo['videoId'],
-            'filename': videoInfo['filename'],
-            'postIds': response['post_ids'],
+            'result': {
+              'video_url': videoInfo['downloadUrl'],
+              'thumbnail_url': videoInfo['thumbnailUrl'],
+              'video_id': videoInfo['videoId'],
+              'filename': videoInfo['filename'],
+              'post_ids': response['post_ids'],
+            },
             'progress': 100,
             'completedAt': FieldValue.serverTimestamp(),
             'updatedAt': FieldValue.serverTimestamp(),
@@ -347,7 +356,7 @@ class PredisVideoService {
         userId: user.uid,
         type: GenerationType.video,
         prompt: prompt,
-        status: 'queued',
+        status: GenerationStatus.pending.value,
         timestamp: DateTime.now(),
         tokenCost: tokenCost,
         progress: 0,
@@ -973,26 +982,40 @@ class PredisVideoService {
     if (user == null) throw Exception('User not authenticated');
 
     try {
-      // Add to user's generated_videos collection instead of video_collection
+      // Add to user's collections subcollection
       await _firestore
           .collection('users')
           .doc(user.uid)
-          .collection('generated_videos')
+          .collection('collections')
           .doc(requestId)
           .set({
-        'videoUrl': videoUrl,
+        'type': 'video',
+        'sourceUrl': videoUrl,
         'prompt': prompt,
-        'metadata': metadata,
         'createdAt': FieldValue.serverTimestamp(),
+        'generationId': requestId,
+        'metadata': {
+          'thumbnailUrl': metadata['thumbnail_url'] ?? metadata['preview_url'],
+          'postId': metadata['post_ids']?[0],
+          'videoId': metadata['video_id'],
+          'predisMetadata': metadata,
+        },
         'userId': user.uid,
+        'status': 'active',
+        'lastModified': FieldValue.serverTimestamp(),
       });
 
-      // Update the request to mark it as added to collection
+      // Update the generation request to mark it as added to collection
       await _firestore
           .collection('generation_queue')
           .doc(requestId)
           .update({
-        'addedToCollection': true,
+        'metadata': {
+          ...metadata,
+          'isAddedToCollection': true,
+          'collectionId': requestId,
+          'addedToCollectionAt': FieldValue.serverTimestamp(),
+        }
       });
 
       debugPrint('[PredisVideo] Successfully added to collection: $requestId');
@@ -1007,20 +1030,24 @@ class PredisVideoService {
     if (user == null) throw Exception('User not authenticated');
 
     try {
-      // Remove from user's generated_videos collection
+      // Remove from user's collections
       await _firestore
           .collection('users')
           .doc(user.uid)
-          .collection('generated_videos')
+          .collection('collections')
           .doc(requestId)
           .delete();
 
-      // Update the request to mark it as removed from collection
+      // Update the generation request to mark it as removed from collection
       await _firestore
           .collection('generation_queue')
           .doc(requestId)
           .update({
-        'addedToCollection': false,
+        'metadata': {
+          'isAddedToCollection': false,
+          'collectionId': null,
+          'removedFromCollectionAt': FieldValue.serverTimestamp(),
+        }
       });
 
       debugPrint('[PredisVideo] Successfully removed from collection: $requestId');

@@ -58,10 +58,7 @@ class GenerationStatusCard extends StatelessWidget {
           size: 40,
         );
       default:
-        return LoadingAnimationWidget.discreteCircle(
-          color: Colors.grey,
-          size: 40,
-        );
+        return const SizedBox.shrink();
     }
   }
 
